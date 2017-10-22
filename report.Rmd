@@ -18,18 +18,95 @@ Minimization of risk and maximization of profit on behalf of the bank.
 
 To minimize loss from the bank’s perspective, the bank needs a decision rule regarding who to give approval of the loan and who not to. An applicant’s demographic and socio-economic profiles are considered by loan managers before a decision is taken regarding his/her loan application. A predictive model developed on this data is expected to provide a bank manager guidance for making a decision whether to approve a loan to a prospective applicant based on his/her profiles.
 
-## Load Packages
+## Exploratory Data Analysis
+
+### Load Packages
 
 ```{r}
 library(data.table)
+library(gmodels)
+library(DT)
+library(pander )
+library(caret)
+library(tidyverse)
 ```
 
 
-## Load Data
+### Load All Data
 
 ```{r}
-credit = fread("german_credit.csv", header="auto")
+credit = fread("german_credit.csv") %>% tbl_df
+```
 
+
+### Variable Classifications
+
+```{r}
+credit_types = credit %>% mutate_all(factor) %>% map(levels) %>% map(length) %>% tbl_df %>% gather(variable, n_unique) %>% arrange(n_unique) %>% mutate(binary = n_unique==2, categorical = n_unique <=10, continuous = n_unique > 10)
+
+datatable(credit_types, style="bootstrap")
+```
+
+### Examing the Response Variable
+
+```{r}
+CrossTable(credit$Creditability)
+```
+
+### Binary Variables
+```{r}
+binary_names = credit_types %>% filter(binary) %>% .$variable
+credit = credit %>% mutate_at(binary_names, factor)
+```
+
+```{r near-zero-var, results = "asis", cache=TRUE}
+# Identify near zero variance predictors
+print("Any empty conditional distributions in at least one class of Creditability?")
+length(checkConditionalX(credit[,binary_names]%>%select(-Creditability), credit$Creditability)) > 0
+nzv = nearZeroVar(credit[,binary_names], names = TRUE, saveMetrics = TRUE) %>% select(-percentUnique)
+indexes = rownames(nzv)
+pandoc.table(data.frame(indexes = indexes, nzv) %>% tbl_df %>% arrange(desc(freqRatio)))
+```
+
+### Non-binary Categorical Variables
+```{r}
+nb_names = credit_types %>% filter(!binary,categorical) %>% .$variable
+credit = credit %>% mutate_at(nb_names, factor)
+```
+
+
+```{r near-zero-var, results = "asis", cache=TRUE}
+# Identify near zero variance predictors
+print("Any empty conditional distributions in at least one class of Creditability?")
+length(checkConditionalX(credit[,nb_names], credit$Creditability)) > 0
+nzv = nearZeroVar(credit[,nb_names], names = TRUE, saveMetrics = TRUE) %>% select(-percentUnique)
+indexes = rownames(nzv)
+pandoc.table(data.frame(indexes = indexes, nzv) %>% tbl_df %>% arrange(desc(freqRatio)))
+```
+
+
+
+### Continous Variables
+
+```{r results="asis"}
+quant_names = credit_types %>% filter(continuous) %>% .$variable
+
+quant_summary = function(data, vector_name) {
+    data %>% summarize_at(vector_name, funs(MIN=min,Q1 = quantile(., 0.25), MEAN = mean, MEDIAN = median,Q3 = quantile(., 0.75), MAX=max,IQR = IQR, STDEV = sd)) %>%
+                                mutate(SKEW = ifelse(MEAN > MEDIAN, "RIGHT", "LEFT"))
+}
+
+data.frame(Predictor = quant_names,
+                        bind_rows(
+                            quant_summary(credit, quant_names[1]),
+                            quant_summary(credit, quant_names[2]),
+                            quant_summary(credit, quant_names[3]))) %>% pandoc.table(split.tables=Inf)
+```
+
+
+## Preprocessing the Data
+
+```{r}
 set.seed(123)
 trainIndex <- createDataPartition(iris$Species, p = train_split_prop, 
                                   list = FALSE, 
