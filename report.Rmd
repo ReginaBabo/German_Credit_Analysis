@@ -1,0 +1,39 @@
+---
+title: "Predicting Credit Risk for German Loan Applicants"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+    toc: true
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,fig.align='center', message = FALSE, warning=FALSE)
+```
+
+## Goal
+
+Minimization of risk and maximization of profit on behalf of the bank.
+
+To minimize loss from the bank’s perspective, the bank needs a decision rule regarding who to give approval of the loan and who not to. An applicant’s demographic and socio-economic profiles are considered by loan managers before a decision is taken regarding his/her loan application. A predictive model developed on this data is expected to provide a bank manager guidance for making a decision whether to approve a loan to a prospective applicant based on his/her profiles.
+
+## Load Packages
+
+```{r}
+library(data.table)
+```
+
+
+## Load Data
+
+```{r}
+credit = fread("german_credit.csv", header="auto")
+
+set.seed(123)
+trainIndex <- createDataPartition(iris$Species, p = train_split_prop, 
+                                  list = FALSE, 
+                                  times = 1)
+
+```
+
