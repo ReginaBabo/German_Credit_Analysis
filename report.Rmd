@@ -18,7 +18,7 @@ Minimization of risk and maximization of profit on behalf of the bank.
 
 To minimize loss from the bank’s perspective, the bank needs a decision rule regarding who to give approval of the loan and who not to. An applicant’s demographic and socio-economic profiles are considered by loan managers before a decision is taken regarding his/her loan application. A predictive model developed on this data is expected to provide a bank manager guidance for making a decision whether to approve a loan to a prospective applicant based on his/her profiles.
 
-## Exploratory Data Analysis
+## Round 1: Exploratory Data Analysis, Loss Function, and Initial Model Fit
 
 ### Load Packages
 
@@ -26,7 +26,11 @@ To minimize loss from the bank’s perspective, the bank needs a decision rule r
 library(data.table)
 library(gmodels)
 library(DT)
-library(pander )
+library(gridExtra)
+library(pander)
+library(stringr)
+library(woe)
+library(ROCR)
 library(caret)
 library(tidyverse)
 ```
@@ -36,6 +40,8 @@ library(tidyverse)
 
 ```{r}
 credit = fread("german_credit.csv") %>% tbl_df
+
+names(credit) = names(credit) %>% tolower %>% str_replace_all("[ /]", "_") %>% str_replace_all("[(&)]", "")
 ```
 
 
@@ -50,7 +56,13 @@ datatable(credit_types, style="bootstrap")
 ### Examing the Response Variable
 
 ```{r}
-CrossTable(credit$Creditability)
+CrossTable(credit$creditability)
+```
+
+```{r}
+credit$creditability = factor(credit$creditability)
+levels(credit$creditability) = make.names(levels(factor(credit$creditability)))   
+credit$creditability = factor(credit$creditability, levels=c("X1", "X0"))
 ```
 
 ### Binary Variables
@@ -62,7 +74,7 @@ credit = credit %>% mutate_at(binary_names, factor)
 ```{r near-zero-var, results = "asis", cache=TRUE}
 # Identify near zero variance predictors
 print("Any empty conditional distributions in at least one class of Creditability?")
-length(checkConditionalX(credit[,binary_names]%>%select(-Creditability), credit$Creditability)) > 0
+length(checkConditionalX(credit[,binary_names]%>%select(-creditability), credit$creditability)) > 0
 nzv = nearZeroVar(credit[,binary_names], names = TRUE, saveMetrics = TRUE) %>% select(-percentUnique)
 indexes = rownames(nzv)
 pandoc.table(data.frame(indexes = indexes, nzv) %>% tbl_df %>% arrange(desc(freqRatio)))
@@ -78,7 +90,7 @@ credit = credit %>% mutate_at(nb_names, factor)
 ```{r near-zero-var, results = "asis", cache=TRUE}
 # Identify near zero variance predictors
 print("Any empty conditional distributions in at least one class of Creditability?")
-length(checkConditionalX(credit[,nb_names], credit$Creditability)) > 0
+length(checkConditionalX(credit[,nb_names], credit$creditability)) > 0
 nzv = nearZeroVar(credit[,nb_names], names = TRUE, saveMetrics = TRUE) %>% select(-percentUnique)
 indexes = rownames(nzv)
 pandoc.table(data.frame(indexes = indexes, nzv) %>% tbl_df %>% arrange(desc(freqRatio)))
@@ -104,13 +116,494 @@ data.frame(Predictor = quant_names,
 ```
 
 
-## Preprocessing the Data
+```{r fig.width=12}
+left = ggplot(credit, aes(duration_of_credit_month, fill=creditability, color=creditability)) + geom_density(alpha=0.5)
+middle= ggplot(credit, aes(age_years , fill=creditability, color=creditability)) + geom_density(alpha=0.5)
+center=ggplot(credit, aes(credit_amount , fill=creditability, color=creditability)) + geom_density(alpha=0.5)
+grid.arrange(left,middle,center, ncol=1)
+```
+
+### Loss Function
+
+```{r}
+Profit35 = function(actual, pred, positive=NULL) {
+    Confusion_DF <- MLmetrics::ConfusionDF(pred, actual)
+    if (is.null(positive) == TRUE) 
+        positive <- as.character(Confusion_DF[1, 1])
+    TP <- as.integer(subset(Confusion_DF, y_true == positive & 
+        y_pred == positive)["Freq"])
+    FP <- as.integer(sum(subset(Confusion_DF, y_true != positive & 
+        y_pred == positive)["Freq"]))
+    val_35 = (TP / sum(Confusion_DF$Freq))*0.35 + (FP / sum(Confusion_DF$Freq))*-1
+    return(val_35)
+}
+p35 = function(data, lev = NULL, model = NULL) {
+  p35_val <- Profit35(data$obs, data$pred, lev[1])
+  spec = MLmetrics::Specificity(data$obs, data$pred)
+  acc = MLmetrics::Accuracy(data$pred, data$obs)
+  c(Accuracy = acc, Specificity= spec, P35 = p35_val)
+}
+
+p35(data.frame(obs = credit$creditability, pred = factor(c(rep("X1", 999), rep("X0",1)))))
+p35(data.frame(obs = credit$creditability, pred = credit$creditability))
+```
+
+
+
+### Exploring Inital Model Space
 
 ```{r}
 set.seed(123)
-trainIndex <- createDataPartition(iris$Species, p = train_split_prop, 
-                                  list = FALSE, 
-                                  times = 1)
+repeatedResamples = function(y, k = 10, reps=10) {
+    suppressWarnings(
+    for (idx in 1:reps) {
+        # Create custom indices: myFolds
+        myFolds <- createCVFolds(y, k = k)
 
+        # Create reusable trainControl object: myControl
+        myControl <- trainControl(summaryFunction = p35,
+                                  classProbs = TRUE, # IMPORTANT!
+                                  verboseIter = TRUE,
+                                  savePredictions = TRUE,
+                                  index = myFolds
+                                 )
+
+        log_fit = train(creditability ~ ., 
+                        method = 'glm', 
+                        family = 'binomial', 
+                        data = credit,
+                        trControl = myControl,
+                        metric = "P35")
+        
+        lda_fit = train(creditability ~ ., 
+                        method = 'lda',
+                        show = FALSE,
+                        data = credit,
+                        trControl = myControl,
+                        metric = "P35")
+        
+        tuneGridRF = data.frame(
+                mtry=54
+            )
+        
+        rf_fit = train(creditability ~ ., 
+                        method = 'rf', 
+                        data = credit,
+                        trControl=myControl,
+                        tuneGrid=tuneGridRF,
+                        metric = "P35")
+        
+        tuneGridXGB <- expand.grid(
+            nrounds=550,
+            max_depth = 1,
+            eta = 0.2,
+            gamma = 0.2,
+            colsample_bytree = 0.65,
+            subsample = 0.95,
+            min_child_weight = 2)
+        
+        xgb_fit = train(creditability ~ ., 
+                        method = 'xgbTree',
+                        data = credit,
+                        trControl= myControl,
+                        tuneGrid = tuneGridXGB,
+                        metric = "P35")
+
+        # Create model_list
+        model_list <- list(log = log_fit, lda = lda_fit, rf = rf_fit, xgb = xgb_fit)
+
+        if (idx == 1) {
+            # Pass model_list to resamples(): resamples
+            resamples <- resamples(model_list)
+        }
+        else {
+            current_resample = resamples(model_list)
+            resamples$values = bind_rows(resamples$values, current_resample$values)
+        }
+        
+    }
+    )
+       return(resamples) 
+    
+}
+summary(repeatedResamples(credit$creditability))
+```
+
+
+## Round Two: Adjusting Random Forest Cutoff Values
+
+```{r}
+set.seed(123)
+repeatedResamples = function(y, data, k = 10, reps=10) {
+    suppressWarnings(
+    for (idx in 1:reps) {
+         # Create custom indices: myFolds
+         myFolds <- createFolds(y, k = k)
+
+        # Create reusable trainControl object: myControl
+        myControl <- trainControl(summaryFunction = p35,
+                                  classProbs = TRUE, # IMPORTANT!
+                                  verboseIter = FALSE,
+                                  savePredictions = TRUE,
+                                  index = myFolds
+                                 )
+
+      
+        rf_fit = train(creditability ~ .,
+                        method = 'rf',
+                        data = credit,
+                        trControl=myControl,
+                        metric = "P35")
+        
+        rf_cut_fit = train(creditability ~ ., 
+                method = 'rf',
+                cutoff = c(0.77,0.23),
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+
+        
+        # Create model_list
+        model_list <- list(rf=rf_fit, rf_cut=rf_cut_fit)
+
+        if (idx == 1) {
+            # Pass model_list to resamples(): resamples
+            resamples <- resamples(model_list)
+        }
+        else {
+            current_resample = resamples(model_list)
+            resamples$values = bind_rows(resamples$values, current_resample$values)
+        }
+        
+    }
+    )
+       return(resamples) 
+    
+}
+fit_results = repeatedResamples(credit$creditability, credit)
+summary(fit_results)
+```
+
+
+## Round Three: Exploring Regularized Models 
+
+```{r}
+set.seed(123)
+repeatedResamples = function(y, data, k = 10, reps=10) {
+    suppressWarnings(
+    for (idx in 1:reps) {
+         # Create custom indices: myFolds
+         myFolds <- createFolds(y, k = k)
+
+        # Create reusable trainControl object: myControl
+        myControl <- trainControl(summaryFunction = p35,
+                                  classProbs = TRUE, # IMPORTANT!
+                                  verboseIter = FALSE,
+                                  savePredictions = TRUE,
+                                  index = myFolds
+                                 )
+
+       log_reg_fit = train(creditability ~ ., 
+                method = 'regLogistic', 
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+
+        rlda_fit = train(creditability ~ ., 
+                method = 'rlda', 
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+        
+        rf_cut_fit = train(creditability ~ ., 
+                method = 'rf',
+                cutoff = c(0.77,0.23),
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+        
+        tuneGridXGB <- expand.grid(
+            nrounds=150,
+            max_depth = 1,
+            eta = 0.45,
+            gamma = 0.2,
+            colsample_bytree = 0.65,
+            subsample = 0.95,
+            min_child_weight = 2)
+
+        xgb_reg_fit = train(creditability ~ ., 
+                method = 'xgbTree',
+                data = data,
+                trControl= myControl,
+                tuneGrid = tuneGridXGB,
+                alpha = 0.45,
+                metric = "P35")
+
+        # Create model_list
+        model_list <- list(log_reg = log_reg_fit, rlda = rlda_fit, rf_cut = rf_cut_fit, xgb=xgb_reg_fit)
+
+        if (idx == 1) {
+            # Pass model_list to resamples(): resamples
+            resamples <- resamples(model_list)
+        }
+        else {
+            current_resample = resamples(model_list)
+            resamples$values = bind_rows(resamples$values, current_resample$values)
+        }
+        
+    }
+    )
+       return(resamples) 
+    
+}
+    
+fit_results = repeatedResamples(credit$creditability, credit)
+summary(fit_results)
+```
+
+## Round 3: Feature Engineering for Dimension Reduction
+
+```{r}
+dummies <- dummyVars(creditability ~ ., data = credit)
+dummies = predict(dummies, newdata = credit) %>% tbl_df
+dummies$creditability = credit$creditability
+```
+
+```{r fig.height=10}
+set.seed(123)
+IV = iv.mult(as.data.frame(dummies),"creditability", summary = TRUE, verbose = FALSE)
+IV %>% iv.plot.summary
+```
+
+
+```{r}
+set.seed(123)
+X = dummies %>% dplyr::select(-creditability)
+library(xgboost)
+# Prep data for xgboost
+x_num = as.matrix(X) %>% apply(2,as.numeric)
+x_label = as.numeric(as.character(ifelse(dummies$creditability == "X1", 1, 0)))
+x_matrix = xgboost::xgb.DMatrix(data = x_num, label = x_label)
+# Fit the model
+bst <- xgboost(data = x_matrix,
+               nround = 150, # default 100
+               eta = 0.45, # default 0.3
+               max.depth = 1, # default = 6 
+               gamma = 0.2, # default 0, if train error >>> test error, bring gamma into action
+               min_child_weight = 2, # default = 1
+               subsample = 0.95, # default = 1
+               colsample_bytree = 0.65, # default 1
+               objective = "binary:logistic",
+               alpha=0.45,
+               eval_metric = "auc")
+
+# plot the most important features
+xgb_import = xgb.importance(colnames(x_num, do.NULL = TRUE, prefix = "col"), model = bst)
+xgb.plot.importance(xgb.importance(colnames(x_num, do.NULL = TRUE, prefix = "col"), model = bst), top_n = 71)
+```
+
+
+```{r}
+combo = IV %>% left_join(xgb_import, by = c("Variable" = "Feature")) 
+combo[is.na(combo)] = 0
+
+combo %>% dplyr::select(Variable, Strength, InformationValue, Gain) %>% mutate(InformationValue = scale(InformationValue), Gain = scale(Gain), mean = InformationValue + Gain / 2) %>% arrange(Variable)
+```
+
+```{r}
+credit_select = credit
+# account_balance - c(2,3) 1,4
+# most_valueable_asset - c(2,3) 1,4
+# payment_status_of_previous_credit - c(0,1,2,3) 4
+# purpose - c(2,4,5,6,8,9,10) 3,1,0
+# sex__marital_status - c(1,4) 2,3
+# value_savings_stocks - c(2,3,4) 1, 5
+
+levels(credit_select$account_balance) = c("1","2","2","3")
+levels(credit_select$most_valuable_available_asset) = c("1","2","2","3")
+levels(credit_select$payment_status_of_previous_credit) = c("1","1","1","1","2")
+levels(credit_select$purpose) = c("0", "1", "2", "3", "2", "2", "2", "2", "2", "2")
+levels(credit_select$sex__marital_status) = c("1","2","3","1")
+levels(credit_select$value_savings_stocks) = c("1","2","2","2","3")
+
+# Eliminate?
+# concurrent_credits
+# duration_in_current_address
+# foreign_worker
+# guarantors
+# installment_per_cent
+# length_of_current_employment
+# no_of_credits_at_this_bank
+# no_of_dependents
+# occupation
+# telephone
+credit_select = credit_select %>% dplyr::select(-concurrent_credits, -duration_in_current_address, -foreign_worker, -guarantors, -instalment_per_cent, -length_of_current_employment, -no_of_credits_at_this_bank, -no_of_dependents, occupation, telephone)
+```
+
+
+```{r}
+set.seed(123)
+repeatedResamples = function(y, data, k = 10, reps=10) {
+    suppressWarnings(
+    for (idx in 1:reps) {
+         # Create custom indices: myFolds
+         myFolds <- createFolds(y, k = k)
+
+        # Create reusable trainControl object: myControl
+        myControl <- trainControl(summaryFunction = p35,
+                                  classProbs = TRUE, # IMPORTANT!
+                                  verboseIter = FALSE,
+                                  savePredictions = TRUE,
+                                  index = myFolds
+                                 )
+
+        log_fit = train(creditability ~ ., 
+                method = 'glm', 
+                family = 'binomial', 
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+        
+        rpart_fit = train(creditability ~ ., 
+                method = 'rpart', 
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+        
+        rf_fit = train(creditability ~ ., 
+                method = 'ranger', 
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+        
+        rf_cut_fit = train(creditability ~ ., 
+                method = 'rf',
+                cutoff = c(0.77,0.23),
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+
+       log_reg_fit = train(creditability ~ ., 
+                method = 'regLogistic', 
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+
+        rlda_fit = train(creditability ~ ., 
+                method = 'rlda', 
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+        
+        tuneGridXGB <- expand.grid(
+                            nrounds=150,
+                            max_depth = 4,
+                            eta = 0.1,
+                            gamma = 0,
+                            colsample_bytree = 0.7,
+                            subsample = 0.75,
+                            min_child_weight = 1)
+
+        xgb_fit = train(creditability ~ ., 
+                method = 'xgbTree',
+                data = data,
+                trControl= myControl,
+                tuneGrid = tuneGridXGB,
+                metric = "P35")
+
+        # Create model_list
+        model_list <- list(log = log_fit, rpart=rpart_fit, rf=rf_fit, rf_cut = rf_cut_fit, xgb=xgb_fit, log_reg = log_reg_fit, rlda=rlda_fit)
+
+        if (idx == 1) {
+            # Pass model_list to resamples(): resamples
+            resamples <- resamples(model_list)
+        }
+        else {
+            current_resample = resamples(model_list)
+            resamples$values = bind_rows(resamples$values, current_resample$values)
+        }
+        
+    }
+    )
+       return(resamples) 
+    
+}
+fit_results_less_dims = repeatedResamples(credit_select$creditability, credit_select)
+summary(fit_results_less_dims)
+```
+
+## Final Model Selection and Metrics
+
+```{r}
+rlda_fit = train(creditability ~ ., 
+                method = 'rlda', 
+                data = data,
+                trControl = myControl,
+                metric = "P35")
+```
+
+
+
+## Conclusion
+```{r}
+set.seed(123)
+repeatedResamples = function(y, data, k = 10, reps=10) {
+    suppressWarnings(
+    for (idx in 1:reps) {
+         # Create custom indices: myFolds
+         myFolds <- createFolds(y, k = k)
+
+        # Create reusable trainControl object: myControl
+        myControl <- trainControl(summaryFunction = p35,
+                                  classProbs = TRUE, # IMPORTANT!
+                                  verboseIter = FALSE,
+                                  savePredictions = TRUE,
+                                  index = myFolds
+                                 )
+
+      
+        rf_fit = train(creditability ~ ., 
+                method = 'ranger',
+                tuneGrid = expand.grid(splitrule="maxstat",
+                alpha = 0.5),
+                control = ranger.control(minsplit = 1, minbucket = 1)
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+        
+        rf2_fit = train(creditability ~ ., 
+                method = 'ranger',
+                tuneGrid = expand.grid(splitrule="maxstat",
+                alpha = 0.85),
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+
+
+        rlda_fit = train(creditability ~ ., 
+                method = 'rlda', 
+                data = data,
+                trControl=myControl,
+                metric = "P35")
+        
+        # Create model_list
+        model_list <- list(rf=rf_fit, rf2=rf2_fit,rlda=rlda_fit)
+
+        if (idx == 1) {
+            # Pass model_list to resamples(): resamples
+            resamples <- resamples(model_list)
+        }
+        else {
+            current_resample = resamples(model_list)
+            resamples$values = bind_rows(resamples$values, current_resample$values)
+        }
+        
+    }
+    )
+       return(resamples) 
+    
+}
+fit_results = repeatedResamples(credit_select$creditability, credit_select)
+summary(fit_results)
 ```
 
