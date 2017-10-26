@@ -1,13 +1,6 @@
 
-set.seed(123)
-temp = createFolds(credit_select$creditability, k = 10)
+library(caret)
 
-for (idx in 1:10) {
-    folds = 1:10
-    folds = folds[-idx]
-    temp[[idx]] = unlist(temp[folds])
-    names(temp[[idx]]) = NULL
-}
 
 createCVFolds = function(y, k = 10) {
     eq_folds = createFolds(y, k = k)
@@ -22,4 +15,4 @@ createCVFolds = function(y, k = 10) {
     return(out)
 }
 
-temp = createCVFolds(credit_select$creditability)
+

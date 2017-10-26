@@ -1,0 +1,50 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+## Load Packages and Data
+```{r}
+update.packages(oldPkgs="caret", ask=FALSE)
+
+library(dplyr)
+library(caret)
+
+## Load Data
+data(GermanCredit)
+
+## Remove Predictors with Zero Variance
+GermanCredit = GermanCredit %>% select(-Purpose.Vacation, -Personal.Female.Single)
+
+## Basic Train Control Settings
+myControl <- trainControl(classProbs = TRUE, # IMPORTANT!
+                          verboseIter = FALSE,
+                          savePredictions = TRUE,
+                          method = "cv"
+)
+
+## Fit RLDA
+rlda_fit = train(Class ~ .,
+                 data = GermanCredit,
+                 method="rlda",
+                 trControl = myControl
+                 )
+
+## Display Predictions and Probabilities from RLDA
+rlda_fit$pred %>% arrange(rowIndex) %>% filter(estimator == "Thomaz-Kitani-Gillies") %>% head(6)
+
+
+## Fit Logistic Regression
+log_fit = train(Class ~ .,
+                 data = GermanCredit,
+                 method="glm",
+                 family = "binomial",
+                 trControl = myControl
+                 )
+
+## Display Logistic Model Predictions and Probabilities
+log_fit$pred %>% head(6)
+```
+
+
+

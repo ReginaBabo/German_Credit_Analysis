@@ -1,58 +1,75 @@
 
-train_cv = function(formula, data, method, cutoff = 0.5, k = 10, fold_index = myFolds, verboseIter = TRUE, ...) {
+train_cv = function(formula, data, method, cutoff = 0.5, k = 10, reps = 10, verboseIter = TRUE, seed = 123, ...) {
     results = data.frame()
-    for (idx in 1:k) {
-        folds = 1:k
-        folds = folds[-idx]
+    set.seed(seed)
+    for (idx in 1:reps) {
+        ## Create unique set of folds
+        y = data[,all.vars(as.formula(formula))[1]][[1]]
+        cv_folds = createCVFolds(y, k = k)
 
-        train = data[fold_index[[idx]],]
-        test = unlist(fold_index[folds])
-        names(test) = NULL
-        test = data[test,]
+        for (fold_idx in cv_folds) {
 
-        myControl <- trainControl(summaryFunction = p35,
-                                  classProbs = TRUE, # IMPORTANT!
-                                  verboseIter = verboseIter,
-                                  savePredictions = TRUE,
-                                  method = "none"
-        )
-        ### Model Fit ###
-        mod_fit = train(formula,
-                        method = method,
-                        data = train,
-                        trControl= myControl,
-                        metric = "P35",
-                        ...)
-        ##################
+            train = data[fold_idx,]
+            test = data[-fold_idx,]
 
-        pred = predict(mod_fit, test, type="prob")[,1]
-        pred = ifelse(pred > cutoff, "X1", "X0")
+            ## Fit Model to Fold and produce results
+            myControl <- trainControl(summaryFunction = p35,
+                                      classProbs = TRUE, # IMPORTANT!
+                                      verboseIter = verboseIter,
+                                      savePredictions = TRUE,
+                                      method = "none"
+            )
+            ### Model Fit ###
+            mod_fit = train(formula,
+                            method = method,
+                            data = train,
+                            trControl= myControl,
+                            metric = "P35",
+                            ...)
+            ##################
 
-        out = data.frame(obs=test$creditability, pred = pred)
+            pos_class_idx = 1
+            if (method == "rlda") {
+                pos_class_idx = 2
+            }
 
-        new = p35(out)
+            pred = predict(mod_fit, test, type="prob")[,pos_class_idx]
+            pred = ifelse(pred > cutoff, "X1", "X0")
 
-        results = rbind(results, new)
+            out = data.frame(obs = test[,all.vars(as.formula(formula))[1]][[1]],
+                             pred = factor(pred, levels=levels(test[,all.vars(as.formula(formula))[1]][[1]])))
+
+            new = p35(out)
+
+            results = rbind(results, new)
+        }
+
     }
     names(results) = c("Accuracy","Specificity","P35")
     return(results)
 }
 
+train_cv(creditability ~ ., data = credit, method = "rf", tuneGrid = tuneGridRF, cutoff = 0.5)
 
-cutoff_seq = function(low, mid, high, formula, data, method, k = 10, fold_index = myFolds, verboseIter = TRUE, ...) {
+cutoff_seq = function(formula, data, method, low = 0.25, mid = 0.5, high = 0.75, k = 10, reps = 10, verboseIter = TRUE, seed = 123, ...) {
     cutoff_options = list()
-    cutoff_vec = c(low,mid,high)
+    cutoff_vec = c(low, mid, high)
     for (cutoff in cutoff_vec) {
-        cutoff_options[[as.character(cutoff)]] = train_cv(formula = formula, data = data, method = method, cutoff = cutoff, k = k, fold_index = fold_index, verboseIter = verboseIter, ...)
+        cutoff_options[[as.character(cutoff)]] = train_cv(formula = formula,
+                                                          data = data,
+                                                          method = method,
+                                                          cutoff = cutoff,
+                                                          k = k,
+                                                          reps = reps,
+                                                          verboseIter = verboseIter,
+                                                          seed = seed,
+                                                          ...)
     }
     return(cutoff_options)
 }
 
 
-
-
-
-cutoff_seq(from = 0.25, to = 0.75, by = 0.25, creditability ~ ., data = credit_select, method = "xgbTree", tuneGrid = tuneGridXGB)
+cutoff_seq(formula = creditability ~ ., data = credit, method = "rf", tuneGrid = tuneGridRF)
 
 get_next_cutoffs = function(by, index_max, key_max) {
     new_by = by - 0.10
@@ -102,9 +119,9 @@ get_next_cutoffs = function(by, index_max, key_max) {
     }
 }
 
-get_best_cutoffs = function(low = 0.25, mid = 0.5, high = 0.75, by = 0.25, formula = formula, data = data, method = method, ...) {
+get_best_cutoffs = function(formula, data, method, low = 0.25, mid = 0.5, high = 0.75, by = 0.25, k = 10, reps = 10, seed = 123, ...) {
     while(by > 0) {
-        medians = lapply(cutoff_seq(low = low, mid = mid, high = high, formula = formula, data = data, method = method, ...), function(x) { median(x$P35) })
+        medians = lapply(cutoff_seq(low = low, mid = mid, high = high, formula = formula, data = data, method = method, k = k, reps = reps, seed = seed,...), function(x) { median(x$P35) })
         if (by == 0.25) {
             print(list(init_cutoff = as.numeric(names(medians)[2]), init_metric = medians[[2]]))
         }
@@ -125,19 +142,17 @@ get_best_cutoffs = function(low = 0.25, mid = 0.5, high = 0.75, by = 0.25, formu
 
 
 # log
-get_best_cutoffs(low = 0.25, mid = 0.5, high = 0.75, by = 0.25, formula = creditability ~ ., data = credit_select, method = "glm", family="binomial", verbose=FALSE)
+get_best_cutoffs(formula = creditability ~ ., data = credit, method = "glm", family="binomial", verbose=FALSE)
 
-# 0.7 0.095
+# 0.7 0.09025 - credit_select
+# 0.7 0.0915 - credit_select
 
-#rpart
-get_best_cutoffs(low = 0.25, mid = 0.5, high = 0.75, by = 0.25, formula = creditability ~ ., data = credit_select, method = "rpart", verbose= FALSE)
 
 #rf
-tuneGridRF = data.frame(mtry=11)
+tuneGridRF = data.frame(mtry=54)
 
-get_best_cutoffs(low = 0.25, mid = 0.5, high = 0.75, by = 0.25, formula = creditability ~ ., data = credit_select, method = "rf", tuneGrid = tuneGridRF, verbose= FALSE)
-# 0.5 0.0345
-# 0.7 0.09
+get_best_cutoffs(formula = creditability ~ ., data = credit_select, method = "rf", tuneGrid = tuneGridRF, verbose= FALSE)
+
 
 #log_reg
 tuneGridLogReg = expand.grid(
@@ -145,10 +160,14 @@ tuneGridLogReg = expand.grid(
     loss = "L1",
     epsilon = 0.001)
 
-get_best_cutoffs(low = 0.25, mid = 0.5, high = 0.75, by = 0.25, formula = creditability ~ ., data = credit_select, method = "regLogistic", tuneGrid = tuneGridLogReg, verbose=TRUE)
+get_best_cutoffs(formula = creditability ~ ., data = credit_select, method = "regLogistic", tuneGrid = tuneGridLogReg, verbose=FALSE)
 
 #rlda
-get_best_cutoffs(low = 0.25, mid = 0.5, high = 0.75, by = 0.25, formula = creditability ~ ., data = credit_select, method = "rlda", verbose= FALSE)
+tuneGridRLDA = data.frame(estimator="Schafer-Strimmer")
+
+get_best_cutoffs(formula = creditability ~ ., data = credit, method = "rlda", tuneGrid=tuneGridRLDA,verbose=FALSE)
+
+get_best_cutoffs(formula = creditability ~ ., data = credit, method = "qda", verbose=FALSE)
 
 #xgb
 tuneGridXGB <- expand.grid(

@@ -12,17 +12,29 @@ output:
 knitr::opts_chunk$set(echo = TRUE,fig.align='center', message = FALSE, warning=FALSE)
 ```
 
-## Goal
+## Quantitative Analysis Introduction
 
-Minimization of risk and maximization of profit on behalf of the bank.
+### Analysis Scenario
 
-To minimize loss from the bank’s perspective, the bank needs a decision rule regarding who to give approval of the loan and who not to. An applicant’s demographic and socio-economic profiles are considered by loan managers before a decision is taken regarding his/her loan application. A predictive model developed on this data is expected to provide a bank manager guidance for making a decision whether to approve a loan to a prospective applicant based on his/her profiles.
+A loan manager is requesting a statistical model to help her department determine which loan applicants are creditable, i.e. most likely to repay their loans. An applicant’s demographic and socio-economic profiles are considered by loan managers before a decision is made regarding his/her loan application. The manager's goal is to minimize risk and maximize profits for the bank's laon portfolio. The mananger shares the information that for the type of loans the model would apply to, if the borrower pays back the loan, the bank makes a profit of 35% of the loans value. On the other hand, if the borrower defaults, the bank's loss is 100%. The bank does not lose money for applicants who are rejected and the manager claims the model does that have to take into account opportunity cost for applicants who would have repaid the loan but were rejected.
+
+Upon receiving this request, I decide to find a model for the manager that maximizes a Profit-Cost function given the provided data. The priority of the model fitting task will be prediction in this case as the manager has not specifically requested an interpretable model, but has requested a model with the best profit characteristics.
+
+### Data Source
+
+The loan manager gives you access to a sample of her department's loan data for 1000 applicants with the outcome of thier loans included. She claims the dataset was prepared by another analyst to be representative of the bank's actual customers. 
+
+The data used in this project was originally provided by Dr. Hans Hofmann of the University of Hamburg and hosted by the UCI Machine Learning Repository. The specific version of the data used here (`credit`) was sourced from Penn State's graduate-level Appplied Data Mining and Statistical Learning 897D course.
 
 ## Round 1: Exploratory Data Analysis, Loss Function, and Initial Model Fit
 
+### Summary
+
+To begin, the data must be loaded into the session and the variables checked to determine their appropriate types. Then, the variance of each variable in relation to the response variable must be checked to ensure there are no zero variance predictors present. The profit/cost information must be programmed into a functional form that can be used to evalute the fitted models. Finally, an initial set of models is fit to the data to determine how best to proceed. 
+
 ### Load Packages
 
-```{r}
+```{r load-pkgs}
 library(data.table)
 library(gmodels)
 library(DT)
@@ -30,26 +42,47 @@ library(gridExtra)
 library(pander)
 library(stringr)
 library(woe)
-library(ROCR)
 library(caret)
 library(tidyverse)
 ```
 
 
-### Load All Data
+### Load the Data
 
-```{r}
-credit = fread("german_credit.csv") %>% tbl_df
+Many of the variable names are invalid such as "Duration of Credit (month)". The whitespaces and invalid parenthesis characters will likely cause problems in any programmatic use of these predictors.
 
-names(credit) = names(credit) %>% tolower %>% str_replace_all("[ /]", "_") %>% str_replace_all("[(&)]", "")
+```{r load-data}
+# Load the data to a tibble dataframe using data.table::fread
+credit = fread("german_credit.csv") %>% 
+                    tbl_df
+
+# Convert all the variable names to snake_case by making them all lower case, removing invalid characters, and replacing spaces with an underscore
+names(credit) = names(credit) %>% 
+                    tolower %>% 
+                    str_replace_all("[ /]", "_") %>% 
+                    str_replace_all("[(&)]", "")
+
+# Show a preview
+credit %>% datatable(style="bootstrap")
 ```
 
 
 ### Variable Classifications
 
-```{r}
-credit_types = credit %>% mutate_all(factor) %>% map(levels) %>% map(length) %>% tbl_df %>% gather(variable, n_unique) %>% arrange(n_unique) %>% mutate(binary = n_unique==2, categorical = n_unique <=10, continuous = n_unique > 10)
+The first step in exploring the data is determine what type of variables are present in the data. Are the variables categorical or quantitative? If they are categorical are they binary or do they have multiple levels. If they are quantitative, are they discrete or continuous? 
 
+```{r var-classification}
+# Force all variables to factors the ncount the number of unique levels present and summarize
+credit_types = credit %>% 
+                    mutate_all(factor) %>% 
+                    map(levels) %>% 
+                    map(length) %>% 
+                    tbl_df %>% 
+                    gather(variable, n_unique) %>% 
+                    arrange(n_unique) %>% 
+                    mutate(binary = n_unique==2, categorical = n_unique <=10, continuous = n_unique > 10)
+
+# Preview the data
 datatable(credit_types, style="bootstrap")
 ```
 
@@ -163,7 +196,7 @@ repeatedResamples = function(y, k = 10, reps=10) {
         # Create reusable trainControl object: myControl
         myControl <- trainControl(summaryFunction = p35,
                                   classProbs = TRUE, # IMPORTANT!
-                                  verboseIter = TRUE,
+                                  verboseIter = FALSE,
                                   savePredictions = TRUE,
                                   index = myFolds
                                  )
@@ -226,11 +259,12 @@ repeatedResamples = function(y, k = 10, reps=10) {
        return(resamples) 
     
 }
-summary(repeatedResamples(credit$creditability))
+report_dat = repeatedResamples(credit$creditability)
+summary(report_dat)
 ```
 
 
-## Round Two: Adjusting Random Forest Cutoff Values
+## Round Two: Exploring Regularized Models 
 
 ```{r}
 set.seed(123)
@@ -238,62 +272,7 @@ repeatedResamples = function(y, data, k = 10, reps=10) {
     suppressWarnings(
     for (idx in 1:reps) {
          # Create custom indices: myFolds
-         myFolds <- createFolds(y, k = k)
-
-        # Create reusable trainControl object: myControl
-        myControl <- trainControl(summaryFunction = p35,
-                                  classProbs = TRUE, # IMPORTANT!
-                                  verboseIter = FALSE,
-                                  savePredictions = TRUE,
-                                  index = myFolds
-                                 )
-
-      
-        rf_fit = train(creditability ~ .,
-                        method = 'rf',
-                        data = credit,
-                        trControl=myControl,
-                        metric = "P35")
-        
-        rf_cut_fit = train(creditability ~ ., 
-                method = 'rf',
-                cutoff = c(0.77,0.23),
-                data = data,
-                trControl=myControl,
-                metric = "P35")
-
-        
-        # Create model_list
-        model_list <- list(rf=rf_fit, rf_cut=rf_cut_fit)
-
-        if (idx == 1) {
-            # Pass model_list to resamples(): resamples
-            resamples <- resamples(model_list)
-        }
-        else {
-            current_resample = resamples(model_list)
-            resamples$values = bind_rows(resamples$values, current_resample$values)
-        }
-        
-    }
-    )
-       return(resamples) 
-    
-}
-fit_results = repeatedResamples(credit$creditability, credit)
-summary(fit_results)
-```
-
-
-## Round Three: Exploring Regularized Models 
-
-```{r}
-set.seed(123)
-repeatedResamples = function(y, data, k = 10, reps=10) {
-    suppressWarnings(
-    for (idx in 1:reps) {
-         # Create custom indices: myFolds
-         myFolds <- createFolds(y, k = k)
+         myFolds <- createCVFolds(y, k = k)
 
         # Create reusable trainControl object: myControl
         myControl <- trainControl(summaryFunction = p35,
@@ -315,12 +294,16 @@ repeatedResamples = function(y, data, k = 10, reps=10) {
                 trControl=myControl,
                 metric = "P35")
         
-        rf_cut_fit = train(creditability ~ ., 
-                method = 'rf',
-                cutoff = c(0.77,0.23),
-                data = data,
-                trControl=myControl,
-                metric = "P35")
+        tuneGridRF = data.frame(
+                mtry=54
+            )
+        
+        rf_fit = train(creditability ~ ., 
+                        method = 'rf', 
+                        data = credit,
+                        trControl=myControl,
+                        tuneGrid=tuneGridRF,
+                        metric = "P35")
         
         tuneGridXGB <- expand.grid(
             nrounds=150,
@@ -340,7 +323,7 @@ repeatedResamples = function(y, data, k = 10, reps=10) {
                 metric = "P35")
 
         # Create model_list
-        model_list <- list(log_reg = log_reg_fit, rlda = rlda_fit, rf_cut = rf_cut_fit, xgb=xgb_reg_fit)
+        model_list <- list(log_reg = log_reg_fit, rlda = rlda_fit, rf = rf_fit, xgb=xgb_reg_fit)
 
         if (idx == 1) {
             # Pass model_list to resamples(): resamples
@@ -407,7 +390,7 @@ xgb.plot.importance(xgb.importance(colnames(x_num, do.NULL = TRUE, prefix = "col
 combo = IV %>% left_join(xgb_import, by = c("Variable" = "Feature")) 
 combo[is.na(combo)] = 0
 
-combo %>% dplyr::select(Variable, Strength, InformationValue, Gain) %>% mutate(InformationValue = scale(InformationValue), Gain = scale(Gain), mean = InformationValue + Gain / 2) %>% arrange(Variable)
+combo %>% dplyr::select(Variable, Strength, InformationValue, Gain) %>% mutate(InformationValue = as.numeric(scale(InformationValue)), Gain = as.numeric(scale(Gain)), mean = InformationValue + Gain / 2) %>% arrange(Variable)
 ```
 
 ```{r}
@@ -447,7 +430,7 @@ repeatedResamples = function(y, data, k = 10, reps=10) {
     suppressWarnings(
     for (idx in 1:reps) {
          # Create custom indices: myFolds
-         myFolds <- createFolds(y, k = k)
+         myFolds <- createCVFolds(y, k = k)
 
         # Create reusable trainControl object: myControl
         myControl <- trainControl(summaryFunction = p35,
@@ -464,26 +447,18 @@ repeatedResamples = function(y, data, k = 10, reps=10) {
                 trControl=myControl,
                 metric = "P35")
         
-        rpart_fit = train(creditability ~ ., 
-                method = 'rpart', 
-                data = data,
-                trControl=myControl,
-                metric = "P35")
+        tuneGridRF = data.frame(
+                mtry=21
+            )
         
         rf_fit = train(creditability ~ ., 
-                method = 'ranger', 
-                data = data,
-                trControl=myControl,
-                metric = "P35")
+                        method = 'rf', 
+                        data = credit,
+                        trControl=myControl,
+                        tuneGrid=tuneGridRF,
+                        metric = "P35")
         
-        rf_cut_fit = train(creditability ~ ., 
-                method = 'rf',
-                cutoff = c(0.77,0.23),
-                data = data,
-                trControl=myControl,
-                metric = "P35")
-
-       log_reg_fit = train(creditability ~ ., 
+        log_reg_fit = train(creditability ~ ., 
                 method = 'regLogistic', 
                 data = data,
                 trControl=myControl,
@@ -512,7 +487,7 @@ repeatedResamples = function(y, data, k = 10, reps=10) {
                 metric = "P35")
 
         # Create model_list
-        model_list <- list(log = log_fit, rpart=rpart_fit, rf=rf_fit, rf_cut = rf_cut_fit, xgb=xgb_fit, log_reg = log_reg_fit, rlda=rlda_fit)
+        model_list <- list(log = log_fit, rf=rf_fit, rf_cut = rf_fit, xgb=xgb_fit, log_reg = log_reg_fit, rlda=rlda_fit)
 
         if (idx == 1) {
             # Pass model_list to resamples(): resamples
@@ -532,12 +507,19 @@ fit_results_less_dims = repeatedResamples(credit_select$creditability, credit_se
 summary(fit_results_less_dims)
 ```
 
+## Round 4: Prediction Probability Cutoff Threshold Optimization
+
+```{r}
+
+```
+
+
 ## Final Model Selection and Metrics
 
 ```{r}
 rlda_fit = train(creditability ~ ., 
                 method = 'rlda', 
-                data = data,
+                data = credit_select,
                 trControl = myControl,
                 metric = "P35")
 ```
