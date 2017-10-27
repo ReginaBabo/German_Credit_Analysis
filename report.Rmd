@@ -18,11 +18,11 @@ knitr::opts_chunk$set(echo = TRUE,fig.align='center', message = FALSE, warning=F
 
 A loan manager is requesting a statistical model to help her department determine which loan applicants are creditable, i.e. most likely to repay their loans. An applicant’s demographic and socio-economic profiles are considered by loan managers before a decision is made regarding his/her loan application. The manager's goal is to minimize risk and maximize profits for the bank's laon portfolio. The mananger shares the information that for the type of loans the model would apply to, if the borrower pays back the loan, the bank makes a profit of 35% of the loans value. On the other hand, if the borrower defaults, the bank's loss is 100%. The bank does not lose money for applicants who are rejected and the manager claims the model does that have to take into account opportunity cost for applicants who would have repaid the loan but were rejected.
 
-Upon receiving this request, I decide to find a model for the manager that maximizes a Profit-Cost function given the provided data. The priority of the model fitting task will be prediction in this case as the manager has not specifically requested an interpretable model, but has requested a model with the best profit characteristics.
+Upon receiving this request, I decide to develop a model for the manager that maximizes a profit-cost function given the provided data. The priority of the model fitting task will be prediction in this case as the manager has not specifically requested an interpretable model, but has requested a model with the best profit characteristics.
 
 ### Data Source
 
-The loan manager gives you access to a sample of her department's loan data for 1000 applicants with the outcome of thier loans included. She claims the dataset was prepared by another analyst to be representative of the bank's actual customers. 
+The loan manager gives you access to a sample of her department's loan data for 1000 applicants with the outcome of thier loans included. She claims the dataset was prepared by another analyst with her input to be representative of the bank's actual customers. 
 
 The data used in this project was originally provided by Dr. Hans Hofmann of the University of Hamburg and hosted by the UCI Machine Learning Repository. The specific version of the data used here (`credit`) was sourced from Penn State's graduate-level Appplied Data Mining and Statistical Learning 897D course.
 
@@ -30,7 +30,7 @@ The data used in this project was originally provided by Dr. Hans Hofmann of the
 
 ### Summary
 
-To begin, the data must be loaded into the session and the variables checked to determine their appropriate types. Then, the variance of each variable in relation to the response variable must be checked to ensure there are no zero variance predictors present. The profit/cost information must be programmed into a functional form that can be used to evalute the fitted models. Finally, an initial set of models is fit to the data to determine how best to proceed. 
+To begin, the data must be loaded into the session and the variables checked to determine their appropriate types. Then, the variance of each predictor variable in relation to the response variable must be checked to ensure there are no zero variance predictors present. The profit/cost information must be programmed into a functional form that can be used to evalute the fitted models. Finally, an initial set of models is fit to the data to determine how best to proceed. 
 
 ### Load Packages
 
@@ -44,8 +44,11 @@ library(stringr)
 library(woe)
 library(caret)
 library(tidyverse)
-```
+##Import Custom functions
+if(!exists("createCVFolds", mode="function")) source("./R/createCVFolds.R")
 
+```
+<br>
 
 ### Load the Data
 
@@ -65,14 +68,14 @@ names(credit) = names(credit) %>%
 # Show a preview
 credit %>% datatable(style="bootstrap")
 ```
-
+<br>
 
 ### Variable Classifications
 
-The first step in exploring the data is determine what type of variables are present in the data. Are the variables categorical or quantitative? If they are categorical are they binary or do they have multiple levels. If they are quantitative, are they discrete or continuous? 
+The first step in exploring the data is determine what type of variables are present in the data. Are the variables categorical or quantitative? If they are categorical are they binary or do they have multiple levels?
 
 ```{r var-classification}
-# Force all variables to factors the ncount the number of unique levels present and summarize
+# Force all variables to factors and count the number of unique levels present.
 credit_types = credit %>% 
                     mutate_all(factor) %>% 
                     map(levels) %>% 
@@ -85,105 +88,186 @@ credit_types = credit %>%
 # Preview the data
 datatable(credit_types, style="bootstrap")
 ```
+<br>
+In this case, variables with ten or less unique levels are considered categorical variables. This assumption will not be true for every data set as some categorical factors will have more than ten levels. However, this cutoff is appropriate for this particular data set as the largest categorical variable has 10 levels. 
+
+Four binary categorical variables are present including the response variable `creditability`.
+
+Fourteen non-binary categorical variables are present.
+
+Three quantitative variables are present. 
+
+Now, each variable type can explored.
 
 ### Examing the Response Variable
 
-```{r}
+First, the response variable is considered seperately as the distribution of the response variable must be determined.
+
+```{r resp-table}
 CrossTable(credit$creditability)
 ```
+<br>
+`creditability` has two levels with 700 observations in the postive class and 300 observations in the negative class. If the data is representative of the loan applicants to the bank, about 70% of applicants can repay their loans and 30% cannot pay. The imbalance in the classes is noted for modeling as more information is available to classify the positive class, which may allow some models to result in good accuracy predicting the postive class, but poor accuracy predicting the negative class, while having good overall accuracy.
+
+The current type of the data treats the classes as either a 1 or a 0. Let's refactor this variable so it is more interpretable. 
 
 ```{r}
-credit$creditability = factor(credit$creditability)
-levels(credit$creditability) = make.names(levels(factor(credit$creditability)))   
-credit$creditability = factor(credit$creditability, levels=c("X1", "X0"))
+# Assign the positive class 1, the label "Good" and the negative class 0, the label"Poor"
+credit$creditability = ifelse(credit$creditability == 1, "Good", "Poor")
+credit$creditability = factor(credit$creditability, levels=c("Good", "Poor"))
+CrossTable(credit$creditability)
 ```
+<br>
 
 ### Binary Variables
-```{r}
-binary_names = credit_types %>% filter(binary) %>% .$variable
+
+Now, the remaining three binary variables are analyzed.
+
+```{r binary-ident}
+# Identify the names of the binary, categorical variables
+binary_names = credit_types %>% 
+                    filter(binary) %>% 
+                    .$variable
+
+# Factor these variables
 credit = credit %>% mutate_at(binary_names, factor)
 ```
+<br>
 
-```{r near-zero-var, results = "asis", cache=TRUE}
-# Identify near zero variance predictors
-print("Any empty conditional distributions in at least one class of Creditability?")
-length(checkConditionalX(credit[,binary_names]%>%select(-creditability), credit$creditability)) > 0
+The most crucial information to determine at this stage in the analysis is whether any of the predictors have zero variance. A predictor has zero variance when all of its values are indentical in respect to the response. For instance, if all observations of a predictor have only "Good" creditability. In such a case, the values of the predictor does not distinguish between the two classes in the response. Many models will fail to fit with zero variance predictors.  In addition, if any individual category of a predictor is zero in respect to the response, then the model fitting will fail as many models separate categorical variables into separate predictors. If any predictor category has zero instances with respect to the response, the model will fail to fit. 
+
+```{r near-zero-var-b, results = "asis"}
+# Any predictor categories with zero instances with respect to the response
+print("Any predictor categories with zero instances with respect to the response?")
+length(checkConditionalX(credit[,binary_names] %>% select(-creditability), credit$creditability)) > 0
+
+# Determine is any predictors has zero variance
 nzv = nearZeroVar(credit[,binary_names], names = TRUE, saveMetrics = TRUE) %>% select(-percentUnique)
 indexes = rownames(nzv)
 pandoc.table(data.frame(indexes = indexes, nzv) %>% tbl_df %>% arrange(desc(freqRatio)))
 ```
+<br>
+
+None of these binary predictors has zero variance, but `foreign_worker` has near zero variance with one class 26x more prevalant than the other in respect to `creditability`. This predictor will remain in the data, but this near zero variance will make it a likely candidate for removal later in the analysis.
+
 
 ### Non-binary Categorical Variables
-```{r}
+
+Next, the non-binary categorical variables are reviewed.
+
+```{r nb-names}
+# Identify the names of the non-binary, categorical variables
 nb_names = credit_types %>% filter(!binary,categorical) %>% .$variable
+# Factor these variables
 credit = credit %>% mutate_at(nb_names, factor)
 ```
+<br>
 
+These predictors are also checked for zero variance.
 
-```{r near-zero-var, results = "asis", cache=TRUE}
-# Identify near zero variance predictors
-print("Any empty conditional distributions in at least one class of Creditability?")
+```{r near-zero-var-nb, results = "asis", cache=TRUE}
+# Any predictor categories with zero instances with respect to the response
+print("Any predictor categories with zero instances with respect to the response??")
 length(checkConditionalX(credit[,nb_names], credit$creditability)) > 0
+
+# Determine is any predictors has zero variance
 nzv = nearZeroVar(credit[,nb_names], names = TRUE, saveMetrics = TRUE) %>% select(-percentUnique)
 indexes = rownames(nzv)
 pandoc.table(data.frame(indexes = indexes, nzv) %>% tbl_df %>% arrange(desc(freqRatio)))
 ```
+<br>
 
+While `guarantors` has a high frequency ratio, none of these predictors is considered to have zero variance or near-zero variance.
 
 
 ### Continous Variables
 
-```{r results="asis"}
+Finally, the continous variables are summarized.
+
+```{r quant-var-check, results="asis"}
+# Identify the names of the non-binary, categorical variables
 quant_names = credit_types %>% filter(continuous) %>% .$variable
 
+# Helper function to summarize each predictor
 quant_summary = function(data, vector_name) {
-    data %>% summarize_at(vector_name, funs(MIN=min,Q1 = quantile(., 0.25), MEAN = mean, MEDIAN = median,Q3 = quantile(., 0.75), MAX=max,IQR = IQR, STDEV = sd)) %>%
+    data %>% summarize_at(vector_name, funs(MIN=min,Q1 = quantile(., 0.25), MEAN = mean, MEDIAN = median, Q3 = quantile(., 0.75), MAX = max, IQR = IQR, STDEV = sd)) %>%
                                 mutate(SKEW = ifelse(MEAN > MEDIAN, "RIGHT", "LEFT"))
 }
 
+# Output table
 data.frame(Predictor = quant_names,
-                        bind_rows(
-                            quant_summary(credit, quant_names[1]),
-                            quant_summary(credit, quant_names[2]),
-                            quant_summary(credit, quant_names[3]))) %>% pandoc.table(split.tables=Inf)
+                            bind_rows(
+                                quant_summary(credit, quant_names[1]),
+                                quant_summary(credit, quant_names[2]),
+                                quant_summary(credit, quant_names[3]))) %>% 
+                        pandoc.table(split.tables=Inf)
 ```
+<br>
 
+All the three variables show marked positive skewness. A density plot of the predictors bears this out even more clearly.
 
 ```{r fig.width=12}
 left = ggplot(credit, aes(duration_of_credit_month, fill=creditability, color=creditability)) + geom_density(alpha=0.5)
-middle= ggplot(credit, aes(age_years , fill=creditability, color=creditability)) + geom_density(alpha=0.5)
-center=ggplot(credit, aes(credit_amount , fill=creditability, color=creditability)) + geom_density(alpha=0.5)
+middle = ggplot(credit, aes(age_years, fill=creditability, color = creditability)) + geom_density(alpha=0.5)
+center = ggplot(credit, aes(credit_amount, fill=creditability, color = creditability)) + geom_density(alpha=0.5)
 grid.arrange(left,middle,center, ncol=1)
 ```
 
+<br>
+
+
 ### Loss Function
 
+After a basic exploratory analysis of the variables, the first round of models can be fit to the data. However, in order to evalute the models, the profit-cost information must be functionalized. 
+
 ```{r}
+# Profit35 calculates the average profit given the predicted class values and the actual class values
 Profit35 = function(actual, pred, positive=NULL) {
+    # Generate a confusion matrix
     Confusion_DF <- MLmetrics::ConfusionDF(pred, actual)
     if (is.null(positive) == TRUE) 
         positive <- as.character(Confusion_DF[1, 1])
+    # Determine True Positive Rate
     TP <- as.integer(subset(Confusion_DF, y_true == positive & 
         y_pred == positive)["Freq"])
+    # Determine False Positive Rate
     FP <- as.integer(sum(subset(Confusion_DF, y_true != positive & 
         y_pred == positive)["Freq"]))
+    # Calculate average profit
     val_35 = (TP / sum(Confusion_DF$Freq))*0.35 + (FP / sum(Confusion_DF$Freq))*-1
     return(val_35)
 }
+# p35 is a wrapper for the caret package that allows the spcificity and accuracy to be included with the Profit35 value in the model evaluation results
 p35 = function(data, lev = NULL, model = NULL) {
   p35_val <- Profit35(data$obs, data$pred, lev[1])
   spec = MLmetrics::Specificity(data$obs, data$pred)
   acc = MLmetrics::Accuracy(data$pred, data$obs)
-  c(Accuracy = acc, Specificity= spec, P35 = p35_val)
+  return(c(Accuracy = acc, Specificity= spec, P35 = p35_val))
 }
+```
+<br>
 
-p35(data.frame(obs = credit$creditability, pred = factor(c(rep("X1", 999), rep("X0",1)))))
+This cost function can be tested using hypothetical predictions from the no-information model, which always predicts the most common class, "Good" and a perfect predictor which predicts all of the classes exactly the same as what is observed in the data.
+
+```{r}
+print("No-Information Model")
+p35(data.frame(obs = credit$creditability, pred = factor(c(rep("Good", 1000)), levels = levels(credit$creditability))))
+print("Perfect Model")
 p35(data.frame(obs = credit$creditability, pred = credit$creditability))
 ```
+<br>
 
+The no-information model has an accuracy of 70%, specficity of 0%, and a P35 value of -0.055. Thus, a dummy model that always issues loans regardless of creditability (labels all applicants as "Good") would be expected to have a 0.055 unit loss. If the average loan amount is \$10,000, then the total loss using this model would be \$550,000 and the per applicant loss is \$550. Note that specificity is included as the specificity (1 - False Positive Rate, or TN / sum(Predicted Negatives)) is going to be strongly related with the P35. This relationship exists because the cost function has a large penalty for false positives, the case when the model predicts an applicant is "Good" when they should be "Bad". This example also indicates how a model's accuracy can be decent at 70%, but expected unit profit is negative, a loss, reinforcing the importance of having both the specificity and P35 metrics included in the model's evaluation.
 
+The perfect model has an accuracy of 100%, a specificity of 100%, and a P35 of 0.245. Thus, if a perfect model existed, it would have a 0.245 unit profit. If the average loan amount is \$10,000, then the total profit using this model would be \$2,450,000 and the per applicant profit is \$2450. In this case, the bank is only ever profiting, and thus, pockets a 35% profit on all loans. It is important that no model should ever exceed this hypothetical value and any model that comes close to it should be evaluated carefully as no model is perfect.   
 
 ### Exploring Inital Model Space
+
+As prediction quality is the priority for this problem, a range of different model types are evaluated at once to see if any particular model produces better predictions. The included models are Logistic Regression, Linear Discriminant Analysis, Random Forest, and XGBoost Gradient Boosted Trees.
+
+Both Random Forest and XGBoost have hyperparameters that can be tuned. The following code block includes the hyperparameters set to their optimal values. For the code used to find the optimal values, see Appendix A.
+
+The models will be trained to maximize the per unit profit using the `p35` function. In order to get a more accurate estimate of the the per unit profit of each model, a 10x10 K-Fold Cross Validation (CV) process is used. Since multiple models are being compared, each model will be trained on the same set of folds.
 
 ```{r}
 set.seed(123)
@@ -216,7 +300,7 @@ repeatedResamples = function(y, k = 10, reps=10) {
                         metric = "P35")
         
         tuneGridRF = data.frame(
-                mtry=54
+                mtry=11
             )
         
         rf_fit = train(creditability ~ ., 
@@ -227,12 +311,12 @@ repeatedResamples = function(y, k = 10, reps=10) {
                         metric = "P35")
         
         tuneGridXGB <- expand.grid(
-            nrounds=550,
-            max_depth = 1,
-            eta = 0.2,
-            gamma = 0.2,
-            colsample_bytree = 0.65,
-            subsample = 0.95,
+            nrounds=300,
+            max_depth = 2,
+            eta = 0.07,
+            gamma = 0.1,
+            colsample_bytree = 1,
+            subsample = 1,
             min_child_weight = 2)
         
         xgb_fit = train(creditability ~ ., 
@@ -262,9 +346,59 @@ repeatedResamples = function(y, k = 10, reps=10) {
 report_dat = repeatedResamples(credit$creditability)
 summary(report_dat)
 ```
+<br>
 
+Overall, the four models improved over the no-information rate with predicted per unit profits ranging from 0.054 to 0.071. The median of the metrics for each model's performance over the CV folds is used for the metric estimate as the median does not depend on the tail behavior of the performace metric distribution and, thus, is highly resistant to aberrant data points created during the k-fold process. 
+
+The best model for this round is the xgboost model. To determine the next steps for improving on these models, the variable importance for the xgboost is calculated.  
+```{r}
+# Fit the xgboost mdoel using the same settings
+set.seed(123)
+# Create custom indices: myFolds
+myFolds <- createCVFolds(credit$creditability, k = 10)
+
+# Create reusable trainControl object: myControl
+myControl <- trainControl(summaryFunction = p35,
+                          classProbs = TRUE, # IMPORTANT!
+                          verboseIter = FALSE,
+                          savePredictions = TRUE,
+                          index = myFolds
+                            )
+
+tuneGridXGB <- expand.grid(
+            nrounds=300,
+            max_depth = 2,
+            eta = 0.07,
+            gamma = 0.1,
+            colsample_bytree = 1,
+            subsample = 1,
+            min_child_weight = 2)
+        
+xgb_fit = train(creditability ~ ., 
+            method = 'xgbTree',
+            data = credit,
+            trControl= myControl,
+            tuneGrid = tuneGridXGB,
+            metric = "P35")
+
+# Plot the variable importance chart
+credit %>% select(-creditability) %>%
+           colnames(do.NULL = TRUE, prefix = "col") %>%
+           xgb.importance(model = xgb_fit$finalModel) %>%
+           xgb.plot.importance(top_n = 20)
+```
+<br>
+The variable importance plot displays the gain contribution of each feature to the model. For a boosted tree model, the gain of each feature of every tree is taken into account, then, the average gain per feature is calculated.
+
+There is a wide array of importance values with `account_balance` having the highest average gain, while `no_of_credits_at_this_bank` has almost a neglibile average gain. There are two conclusions one can draw from this disparity to improve model fit.
+
+1) Assuming the average gain derived from the xgboost model is proprotional to the information value of each of the predictors, it may be appropriate to introduce regularization into the model fitting procedure. Regularization introduces penalties for model complexity in order to reduce overfitting. Overfitting causes increases in mode lvariance for out-of-sample predictions, which reduces model quality and accuracy. Since so many of the variables have low average gain relative to the others, it is possible the model will overfit the data to some extent by attempting to draw relationships from variables that little to no relationship with the response. Models like xgboost and random forests are more robust to this issue. But, the logistic regression and linear discriminant analysis are not robust to such issue and may improve from regularization.
+
+2) Similar to above, some variables may be removed entirely to reduce prediction variance. This may include collapsing multiple predictor levels so that there are less unique values for each categorical predictor.
 
 ## Round Two: Exploring Regularized Models 
+
+For round two, the goal will be to use regularization in each model fitting procedure to see if the fit improves. Random forests do not have a regularization feature so the same settings will be used for the "rf" model. Otherwise, the method "regLogistic" for regularized logistic regression, "rlda" for regularized lienar discriminant analysis, and the alpha and lambda settings for xgboost will be used. 
 
 ```{r}
 set.seed(123)
@@ -295,7 +429,7 @@ repeatedResamples = function(y, data, k = 10, reps=10) {
                 metric = "P35")
         
         tuneGridRF = data.frame(
-                mtry=54
+                mtry=11
             )
         
         rf_fit = train(creditability ~ ., 
@@ -587,5 +721,199 @@ repeatedResamples = function(y, data, k = 10, reps=10) {
 }
 fit_results = repeatedResamples(credit_select$creditability, credit_select)
 summary(fit_results)
+```
+
+## Appendix A: Tuning Hyperparamaters
+
+Both Random Forests and XGBoosted Trees have tunable hyperparameters.
+
+For Random Forest, the hyperparameter is "mtry". To determine the best mtry, a standard three value search is performed for a small, medium, and large value of mtry.
+
+For XGBoost, the following steps are conducted using the tuneGrid option in caret:train - adapted from ("https://www.analyticsvidhya.com/blog/2016/03/complete-guide-parameter-tuning-xgboost-with-codes-python/"):
+    1) Set eta = 0.1, max_depth = 5, min_child_weight = 1, gamma = 0, subsample = 0.8, colsample_bytree = 0.8
+        a) Find the best nrounds by using seq(from = 50, to = 950, by = 50)
+    2) Set nrounds equal to best value from 1a
+        a) Find the best max_depth by using seq(1,10,1) and min_child_weight by suing seq(1,6,1) in the same call to train
+    3) Set max_depth and min_child_weight to best value from 2a
+        a) Find the best gamma using seq(0,0.5,0.1)
+        b) Find the best nrounds by using seq(from = 50, to = 950, by = 50)
+    4) Set gamma to best value from 3a and set nrounds to the best value from 3b
+        a) Find the best subsample and colsample_bytree using seq(0.6,1,0.05) in the same call to train
+    5) Set subsample and colsample_bytree to best values from 4a
+        a) IF REGULARIZING ONLY- Find best alpha or lambda values using seq(0,1,0.1)
+        b) Find best eta using seq(0.01,0.1,0.01)
+    6) Set alpha and lambda to best values from 5a and eta to best value from 5b
+
+The following code determines the best settings using 10X10 fold cross validation.
+```{r}
+### Tuning Board ###
+## Inital Settings
+training_data = credit
+
+myFolds <- createCVFolds(credit$creditability, k = 10)
+
+myControl <- trainControl(summaryFunction = p35,
+                          classProbs = TRUE, # IMPORTANT!
+                          verboseIter = TRUE,
+                          savePredictions = TRUE,
+                          index = myFolds
+)
+
+## Helper function
+Mode <- function(x) {
+    ux <- unique(x)
+    ux[which.max(tabulate(match(x, ux)))]
+}
+
+repeatedResamples = function(formula, data, method, k = 10, reps=10, cutoff = 0.5, verboseIter = TRUE, non_tune_param = FALSE, ...) {
+    set.seed(123)
+    results = list()
+    suppressWarnings(
+        for (idx in 1:reps) {
+            
+            # Create custom indices: myFolds
+            y = data[,all.vars(as.formula(formula))[1]][[1]]
+            myFolds = createCVFolds(y, k = k)
+            # Create reusable trainControl object: myControl
+            myControl <- trainControl(summaryFunction = p35,
+                                      classProbs = TRUE, # IMPORTANT!
+                                      verboseIter = verboseIter,
+                                      savePredictions = TRUE,
+                                      index = myFolds
+            )
+            
+            #### MODEL ZONE ####
+            mod_fit = train(formula,
+                            method = method,
+                            data = data,
+                            trControl= myControl,
+                            metric = "P35",
+                            ...)
+            ########
+            results[[idx]] = mod_fit$results %>% arrange(desc(P35))
+            
+        }
+    )
+        if (!non_tune_param) {
+            # most_common_result = sapply(results, function(x) row.names(x) %>% as.numeric()) == Mode(sapply(results, function(x) row.names(x) %>% as.numeric()))
+            # results = results[most_common_result]
+            return(results)
+        }
+        else {
+            best_setting_idx = Mode(sapply(results, function(x) which.max(x$P35)))
+            cv_metric = median(sapply(results, function(x) x$P35[best_setting_idx]))
+            best_setting = unique(sapply(results, function(x) x[,1][best_setting_idx]))
+            results = list(best_setting = best_setting, cv_metric = cv_metric) 
+            return(results)
+        }
+}
+
+### Unique model tuning grid for tunable parameters ###
+tuneGridXGB <- expand.grid(
+    nrounds=100,
+    max_depth = seq(1,10,1),
+    eta = 0.1,
+    gamma = 0,
+    colsample_bytree = 0.8,
+    subsample = 0.8,
+    min_child_weight = seq(1,6,1))
+
+######--------------------######
+
+### Unique model settings for tunable parameters
+repeatedResamples(formula = creditability ~ .,
+                  data = training_data,
+                  method = "xgbTree",
+                  tuneGrid = tuneGridXGB,
+                  verboseIter = FALSE)
+
+### For parameters not tunable by the caret package
+out = data.frame()
+for (setting in seq(0,1,0.1)) {
+    set.seed(123)
+    results = repeatedResamples(formula = creditability ~ .,
+                                data = training_data,
+                                method = "xgbTree",
+                                tuneGrid = tuneGridXGB,
+                                non_tune_param = TRUE,
+                                alpha = setting)
+    new = data.frame(setting = setting, cv_metric = median(sapply(results, function(x) x$P35)))
+    out = bind_rows(out, new)
+}
+out %>% arrange(desc(cv_metric))
+```
+
+```{r}
+## trainControl settings for hyperparameter tunning
+myControl <- trainControl(summaryFunction = p35,
+                          classProbs = TRUE, # IMPORTANT!
+                          verboseIter = FALSE,
+                          savePredictions = TRUE,
+                          method= "cv",
+                          number = 10
+)
+
+### Unique model tuning grid for tunable parameters ###
+tuneGridXGB <- expand.grid(
+    nrounds=300,
+    max_depth = 2,
+    eta = 0.1,
+    gamma = 0.1,
+    colsample_bytree = 1,
+    subsample = 1,
+    min_child_weight = 2)
+
+## Tuning model for tunable hyperparameters in caret
+set.seed(123)
+train(formula = creditability ~ .,
+                  data = credit,
+                  method = "rf",
+                  # tuneGrid = tuneGridXGB,
+                  trControl = myControl)
+
+
+## Tuning model for non-tunable hyperparameters in caret
+set.seed(123)
+results_list = list()
+for (value in seq(0,1, 0.1)) {
+fit = train(formula = creditability ~ .,
+                  data = credit,
+                  method = "xgbTree",
+                  tuneGrid = tuneGridXGB,
+                  trControl = myControl,
+                  alpha = value)  
+results_list[[as.character(value)]] = fit$results 
+}
+```
+
+
+
+```{r}
+# XGB for Round 1
+ # 1) Set eta = 0.1, max_depth = 5, min_child_weight = 1, gamma = 0, subsample = 0.8, colsample_bytree = 0.8
+ #        a) Find the best nrounds = 300
+ #    2) Set nrounds equal to best value from 1a
+ #        a) Find the best max_depth = 2 and min_child_weight = 2
+ #    3) Set max_depth and min_child_weight to best value from 2a
+ #        a) Find the best gamma = 0.1
+ #        b) Find the best nrounds = 300
+ #    4) Set gamma to best value from 3a and set nrounds to the best value from 3b
+ #        a) Find the best subsample = 1 and colsample_bytree = 1 
+ #    5) Set subsample and colsample_bytree to best values from 4a
+ #        a) IF REGULARIZING ONLY- Find best alpha or lambda values using seq(0,1,0.1)
+ #        b) Find best eta = 0.07
+ #    6) Set alpha and lambda to best values from 5a and eta to best value from 5b
+ #        a) Find best nrounds 
+```
+
+```{r}
+round1_tuneGridXGB <- expand.grid(
+            nrounds=300,
+            max_depth = 2,
+            eta = 0.07,
+            gamma = 0.1,
+            colsample_bytree = 1,
+            subsample = 1,
+            min_child_weight = 2)
 ```
 
