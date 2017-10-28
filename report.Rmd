@@ -151,7 +151,7 @@ pandoc.table(data.frame(indexes = indexes, nzv) %>% tbl_df %>% arrange(desc(freq
 ```
 <br>
 
-None of these binary predictors has zero variance, but `foreign_worker` has near zero variance with one class 26x more prevalent than the other in respect to `creditability`. This predictor will remain in the data, but this near zero variance will make it a likely candidate for removal later in the analysis.
+None of these binary predictors has zero variance, but `foreign_worker` has near zero variance with one class 26x more prevalent than the other in respect to `creditability`. This predictor will remain in the data, but this near zero variance could make it a likely candidate for removal later in the analysis if regularization is needed for model building.
 
 
 ### Non-binary Categorical Variables
@@ -271,9 +271,9 @@ The perfect model has an accuracy of 100%, a specificity of 100%, and a P35 of 0
 
 ### Exploring the Initial Model Space
 
-As prediction quality is the priority for this problem, a range of different model types is evaluated at once to see if any particular model produces better predictions. The included models are Logistic Regression, Linear Discriminant Analysis, Random Forest, and XGBoost Gradient Boosted Trees.
+As prediction quality is the priority for this problem, a range of different model types is evaluated at once to see if any particular model produces better predictions. The included models are logistic regression, linear discriminant analysis, random forest, and xgboost gradient boosted trees.
 
-Both Random Forest and XGBoost have hyperparameters that can be tuned. The following code block includes the hyperparameters set to their optimal values. For the code used to find the optimal values, see Appendix A.
+Both random forest and xgboost have hyperparameters that can be tuned. The following code block includes the hyperparameters set to their optimal values. For the code used to find the optimal values, see Appendix A.
 
 The models will be trained to maximize the per unit profit using the `p35` function. In order to get a more accurate estimate of the per unit profit of each model, a 10x10 K-Fold Cross Validation (CV) process is used. Since multiple models are being compared, each model will be trained on the same set of folds.
 
@@ -360,11 +360,7 @@ Overall, the four models improved over the performance of no-information model. 
 
 The best model for this round is the xgboost model. 
 
-Next concerns to consider:
-
-1) It may be appropriate to introduce regularization into the model fitting procedure. Regularization introduces penalties for model complexity in order to reduce overfitting. Overfitting causes increases in model variance for out-of-sample predictions, which reduces model quality and accuracy. Since so many of the variables have low average gain relative to the others, it is possible the model will overfit the data to some extent by attempting to draw relationships from variables that little to no relationship with the response. Models like xgboost and random forests are more robust to this issue. But, the logistic regression and linear discriminant analysis are not robust to such issue and may improve from regularization.
-
-2) Similar to above, some variables may be removed entirely to reduce prediction variance. This may include collapsing multiple predictor levels so that there are less unique values for each categorical predictor.
+It may be appropriate to introduce regularization into the model fitting procedure. Regularization introduces penalties for model complexity in order to reduce overfitting. Overfitting causes increases in model variance for out-of-sample predictions, which reduces model quality and accuracy. Since so many of the variables have low average gain relative to the others, it is possible the model will overfit the data to some extent by attempting to draw relationships from variables that little to no relationship with the response. Models like xgboost and random forests are more robust to this issue. But, the logistic regression and linear discriminant analysis are not robust to such issue and may improve from regularization.
 
 ***
 
@@ -435,13 +431,13 @@ summary(fit_results)
 
 The regularized logistic regression performed similarly to the logistic regression with a median per unit profit of 0.057 for the regularized logistic regression versus 0.055 for the logistic regression. The original logistic regression will be used going forward.
 
-On the other hand, the regularized linear discriminant analysis resulted in a per unit profit of 0.088 versus the linear discriminate analysis which had a per unit profit of 0.054. The "rlda" model's significant performance is related to its high Specificity of 0.77, resulting in a lower false positive rate which means fewer applicants with bad credit are classified as having good credit by the model. 
+On the other hand, the regularized linear discriminant analysis resulted in a per unit profit of 0.088 versus the linear discriminate analysis which had a per unit profit of 0.054. The "rlda" model's significant performance is related to its high specificity of 0.77, resulting in a lower false positive rate which means fewer applicants with bad credit are classified as having good credit by the model. 
 
 ***
 
 ## Round Three: Prediction Probability Cutoff Threshold Optimization
 
-One of the assumptions that the analysis up to this point has made is that the cutoff threshold for determining whether a prediction belongs to the positive class or negative class is 0.5. This value means that if the model gives a prediction probability of greater than 0.5 then the prediction will be "Good" and vice versa. This threshold changes the Sensitivity and Specificity of the model's performance. Since the profit-cost function is sensitive to a model's Specificity, which is inversely proportional to its False Positive Rate, the next step will be to modify the most promising models' prediction cutoff probabilities to favor a higher Specificity. In effect, if the prediction probability cutoff value is increased above 0.5, then the model will be less likely to predict "Good" creditability, potentially reducing the number of "Good" predictions that are in fact "Poor" and increasing the per unit profit of the model.  
+One of the assumptions that the analysis up to this point has made is that the cutoff threshold for determining whether a prediction belongs to the positive class or negative class is 0.5. This value means that if the model gives a prediction probability of greater than 0.5 then the prediction will be "Good" and vice versa. This threshold changes the sensitivity and specificity of the model's performance. Since the profit-cost function is sensitive to a model's specificity, which is inversely proportional to its False Positive Rate, the next step will be to modify the most promising models' prediction cutoff probabilities to favor a higher specificity. In effect, if the prediction probability cutoff value is increased above 0.5, then the model will be less likely to predict "Good" creditability, potentially reducing the number of "Good" predictions that are in fact "Poor" and increasing the per unit profit of the model.  
 
 The functions for this step are found in the cutoff_check.R file and involve a 10x10 K-Fold Cross Validation similar to the validation procedures used previously in this analysis. The procedure evaluates cutoff values down to a 0.05 difference in values (0.50, 0.55, 0.6, etc).
 
@@ -454,7 +450,7 @@ final_results = train_cv(formula = creditability ~ ., data = credit, , method = 
 log_perf = data.frame(value = final_results$P35, group="Logistic")
 ```
 <br>
-Starting with the Logistic Regression model, the best cutoff is 0.7, which increases the estimate of the model's per unit profit from 0.057 to 0.088.
+Starting with the logistic regression model, the best cutoff is 0.7, which increases the estimate of the model's per unit profit from 0.057 to 0.088.
 
 
 ```{r cutoff-rf, cache=TRUE, results = "asis"}
@@ -487,7 +483,7 @@ final_results = train_cv(formula = creditability ~ ., data = credit, method = "x
 xgb_perf = data.frame(value = final_results$P35, group="Xgboost")
 ```
 <br>
-The per unit profit estimate for the Xgboost model is improved from 0.054 to 0.092 using a cutoff of 0.7. This outcome is the best median CV performance seen so far.
+The per unit profit estimate for the xgboost model is improved from 0.054 to 0.092 using a cutoff of 0.7. This outcome is the best median CV performance seen so far.
 
 ```{r cutoff-rlda, cache=TRUE, results = "asis"}
 # Determine best cutoff using 10x10 K-Fold Cross Validation
@@ -499,11 +495,11 @@ final_results = train_cv(formula = creditability ~ ., data = credit, method = "r
 rlda_perf = data.frame(value = final_results$P35, group="Regularized LDA")
 ```
 <br>
-The per unit profit estimate for the Regularized LDA model is negligibly improved from 0.088 to 0.092 using a cutoff of 0.5. The small difference in performance 0f 0.004 between the models for the same cutoff value (since 0.5 is the default cutoff) is due to the variance caused by a different set of folds used in the 10x10 K-Fold CV for the best cutoff search process. This outcome gives evidence to the validity of the CV procedure as the performance estimates for two entirely different sets of CV folds had similar median per unit profit values. 
+The per unit profit estimate for the regularized LDA model is negligibly improved from 0.088 to 0.092 using a cutoff of 0.5. The small difference in performance 0f 0.004 between the models for the same cutoff value (since 0.5 is the default cutoff) is due to the variance caused by a different set of folds used in the 10x10 K-Fold CV for the best cutoff search process. This outcome gives evidence to the validity of the CV procedure as the performance estimates for two entirely different sets of CV folds had similar median per unit profit values. 
 
 ### Final Model Selection and Metrics
 
-With the best cutoffs selected for the models, all four of the final model candidates have similar performance metrics with the Xgboost and Regularized LDA models showing the best per unit profit estimates and the Logistic Regression and Random Forest models showing slightly worse results. However, the range of per unit profit estimates is only 0.005. Thus, these models have similar performance characteristics. 
+With the best cutoffs selected for the models, all four of the final model candidates have similar performance metrics with the xgboost and regularized LDA models showing the best per unit profit estimates and the logistic regression and random forest models showing slightly worse results. However, the range of per unit profit estimates is only 0.005. Thus, these models have similar performance characteristics. 
 
 In order to make the final selection, the distribution of per unit profit estimates for each of the ten repeated CV folds for each model with the optimum cutoff values is plotted together in a density plot. The density plot shows the distribution of values that occurred during the 10x10 K-Fold CV. Since the performance value produced from this procedure is an estimate of model performance, one can treat the probability density of each model's per unit profit estimates as representative of a sampling distribution of the actual model performance. 
 
@@ -522,7 +518,7 @@ all_perf %>% ggplot(aes(x = value, fill=group, color=group)) +
 ```
 <br>
 
-Looking at this plot it is clear that no one model is significantly better than another due to the high overlap in distributions. However, if one had to choose a model, the Xgboost model has the relatively most favorable model with a greater density over higher per unit profit estimate values. The relatively worse model would be the Logistic Regression as it as a greater variance in values than the other models and is, thus, expected to have a more unpredictable performance when used on out-of-sample data.
+Looking at this plot it is clear that no one model is significantly better than another due to the high overlap in distributions. However, if one had to choose a model, the xgboost model has the relatively most favorable model with a greater density over higher per unit profit estimate values. The relatively worse model would be the Logistic Regression as it as a greater variance in values than the other models and is, thus, expected to have a more unpredictable performance when used on out-of-sample data.
 
 The final model is fit to the data using 10x10 K-Fold CV. In order to use the model on new predictions, a conditional transformation using the model's predictions probabilities for the class "Good" would have to be performed using a cutoff threshold of 0.7. 
 ```{r}
@@ -624,17 +620,19 @@ It appears the fourth category of `account_balance` has the highest predictive v
 
 ## Conclusion
 
-The best model to predict creditability uses the Xgboost algorithm to fit a gradient boosted tree classification model to the data. The final model, when using a 0.7 cutoff threshold, is expected produce a per unit profit of 0.092. This expected performance is an increase of 0.147 in expected per unit profit over a no-information model that only predicts "Good" creditability has an expected per unit profit of -0.055. If the model meets this performance estimate, the bank should expect to earn a per applicant profit of $920 if the average loan amount is \$10,000.
+The best model to predict creditability uses the xgboost algorithm to fit a gradient boosted tree classification model to the data. The final model, when using a 0.7 cutoff threshold, is expected produce a per unit profit of 0.092. This expected performance is an increase of 0.147 in expected per unit profit over a no-information model that only predicts "Good" creditability has an expected per unit profit of -0.055. If the model meets this performance estimate, the bank should expect to earn a per applicant profit of $920 if the average loan amount is \$10,000.
+
+One advantage of the xgboost model is it is portable to another language like Python. This benefit means the model could be coded into a predictive program that loan managers could run on applicant information. This tool could also be constructed using the R Shiny package as well.
 
 ***
 
 ## Appendix A: Tuning Hyperparamaters
 
-Both Random Forests and XGBoosted Trees have tunable hyperparameters.
+Both random forests and xgboost trees have tunable hyperparameters.
 
-For Random Forest, the hyperparameter is "mtry". To determine the best mtry, a standard three value search is performed for a small, medium, and large value of mtry.
+For random forest, the hyperparameter is "mtry". To determine the best mtry, a standard three value search is performed for a small, medium, and large value of mtry.
 
-For XGBoost, the following steps are conducted using the tuneGrid option in caret:train - adapted from ("https://www.analyticsvidhya.com/blog/2016/03/complete-guide-parameter-tuning-xgboost-with-codes-python/"): <br>
+For xgboost, the following steps are conducted using the tuneGrid option in caret:train - adapted from ("https://www.analyticsvidhya.com/blog/2016/03/complete-guide-parameter-tuning-xgboost-with-codes-python/"): <br>
 
     1. Set eta = 0.1, max_depth = 5, min_child_weight = 1, gamma = 0, subsample = 0.8, colsample_bytree = 0.8
         a. Find the best nrounds by using seq(from = 50, to = 950, by = 50)
