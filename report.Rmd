@@ -12,6 +12,9 @@ output:
 knitr::opts_chunk$set(echo = TRUE,fig.align='center', message = FALSE, warning=FALSE)
 ```
 
+By: Connor Lenio  
+Completed: October 28, 2017
+
 ## Quantitative Analysis Introduction
 
 ### Analysis Scenario
