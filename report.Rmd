@@ -468,21 +468,33 @@ On the other hand, the regularized linear discriminant analysis resulted in a pe
 
 ## Round 3: Prediction Probability Cutoff Threshold Optimization
 
+One of the assumptions that the analysis up to this point has made is that the cutoff threshold for determining whether a prediction belongs to the positve class or negative class is 0.5. This value means that if the model gives a prediction probability of greater than 0.5 then the prediciton will be "Good" and vica versa. This threshold changes the Sensitivity and Specificity of the model's performance. Since the profit-cost function is sensitive to a model's Specificity, which is inversely proportional to its False Positive Rate, the next step will be to modify the most promising models' prediction cutoff probabilities to favor a higher Specificity. In effect, if the the prediction probability cutoff value is increased above 0.5, then the model will be less likely to predict "Good" creditability, potentially reducing the number of "Good" predictions that are in fact "Poor" and increasing the per unit profit of the model.  
+
+The functions for this step are found in the cutoff_check.R file and involve a 10x10 K-Fold Cross Validation similar to the validation procedures used previously in this analysis. The procedure evaluates cutoff values down to a 0.05 difference in values (0.50, 0.55, 0.6, etc).
 
 ```{r cutoff-log, cache=TRUE}
+# Determine best cutoff using 10x10 K-Fold Cross Validation
 best_cutoff = get_best_cutoffs(formula = creditability ~ ., data = credit, method = "glm", family="binomial", verbose = FALSE)
 best_cutoff %>% pandoc.table()
+# Save final results for comparison to other models
 final_results = train_cv(formula = creditability ~ ., data = credit, , method = "glm", family="binomial", verbose=FALSE, cutoff = 0.7)
 log_perf = data.frame(value = final_results$P35, group="Logistic")
 ```
+<br>
+Staring with the Logistic Regression model, the best cutoff is 0.7, which increases the estimate of the model's per unit profit from 0.057 to 0.088.
+
 
 ```{r cutoff-rf, cache=TRUE}
+# Determine best cutoff using 10x10 K-Fold Cross Validation
 round1_tuneGridRF = data.frame(mtry=11)
 best_cutoff = get_best_cutoffs(formula = creditability ~ ., data = credit, method = "rf", tuneGrid = round1_tuneGridRF, verbose=FALSE)
 best_cutoff %>% pandoc.table()
+# Save final results for comparison to other models
 final_results = train_cv(formula = creditability ~ ., data = credit, , method = "rf", tuneGrid = round1_tuneGridRF, verbose=FALSE, cutoff = 0.7)
 rf_perf = data.frame(value = final_results$P35, group="Random Forest")
 ```
+<br>
+The per unit profit estimate for the Random Forest model is improved from 0.034 to 0.087 using a cutoff of 0.7. 
 
 ```{r cutoff-xgb, cache=TRUE}
 round1_tuneGridXGB <- expand.grid(
@@ -499,6 +511,8 @@ best_cutoff %>% pandoc.table()
 final_results = train_cv(formula = creditability ~ ., data = credit, method = "xgbTree", tuneGrid=round1_tuneGridXGB, verbose=FALSE, cutoff = 0.7)
 xgb_perf = data.frame(value = final_results$P35, group="Xgboost")
 ```
+<br>
+The per unit profit estimate for the Xgboost model is improved from 0.054 to 0.092 using a cutoff of 0.7. This outcome is the best median CV performance seen so far.
 
 ```{r cutoff-rlda, cache=TRUE}
 round2_tuneGridrlda = data.frame(estimator = "Moore-Penrose Pseudo-Inverse")
@@ -507,23 +521,31 @@ best_cutoff %>% pandoc.table()
 final_results = train_cv(formula = creditability ~ ., data = credit, method = "rlda", tuneGrid=round2_tuneGridrlda, verbose=FALSE, cutoff = 0.7)
 rlda_perf = data.frame(value = final_results$P35, group="Regularized LDA")
 ```
-
+<br>
+The per unit profit estimate for the Regularized LDA model is negligibly improved from 0.088 to 0.092 using a cutoff of 0.5. The small difference in performance 0f 0.004 between the models for the same cutoff value (since 0.5 is the default cutoff) is due to the variance caused by a different set of folds used in the 10x10 K-Fold CV for the best cutoff search process. This outcome gives evidence to the validity of the CV procedure as the performance estimatess for two entirely different sets of CV fols had similar median per unit profit values. 
 
 ### Final Model Selection and Metrics
+
+With the best cutoffs selected for the models, all four of the fina lmodel candidates have similar performance metrics with the Xgboost and Regularized LDA models showing the best per unit profit estimates and the Logistic Regression and Random Forest models showing slightly worse results. However, the range of per unit profit estimates is only 0.005. Thus, these models have similar performance charactersitics. 
+
+In order to make the final selection, the distribution of per unit profit esitmates for each of the ten repeated folds for each model with the optimum cutoff are plotted together in a density plot. The density plot shows the distribution of values that occured during the 10x10 K-Fold CV. Since the performance value produced from this procedure is an estimate of model performance, one can treat the probability density of each model's per unit profit estimates as representative of a sampling distribution of the actual model performance. 
 
 ```{r final-fit, cache=TRUE}
 all_perf = bind_rows(log_perf, rf_perf, xgb_perf, rlda_perf)
 all_perf %>% ggplot(aes(x = value, fill=group, color=group)) + 
                     geom_density(alpha=0.3) +
                     theme(legend.position=c(0.2, 0.8), plot.title = element_text(hjust = 0.5)) +
-                    labs(title = "Density of `audience_score` by `feature_film`", 
+                    labs(title = "Density of Per Unit Profit by Model Type", 
                          y = "P(Per Unit Profit)", 
                          x = "Per Unit Profit", 
                          fill = "Model Type",
                          color = "Model Type")
 ```
+<br>
 
+Looking at this plot it is clear that no one model is significantly better than another due to the high overlap in distributions. However, if one had to chosoe a model, the Xgboost model has the relatively most favorable mode with a greater density over higher per unit profit estimate values. The relatively worse model would be the Logistic Regression as it as a greater variance in values than the other models and is, thus, expected to have a more unpredictable performance when used on out-of-sample data.
 
+The final model is fit to the data using 10x10 K-Fold CV. In order to use the model on new predictions, a conditional transformation using the model's predictions probabilities for the class "Good" would have to be performed using a cutoff threshold of 0.7. 
 ```{r}
 set.seed(123)
 # Create custom indices: myFolds
@@ -541,13 +563,14 @@ final_fit = train(creditability ~ .,
                   data = credit,
                   method = "xgbTree",
                   tuneGrid = round1_tuneGridXGB,
-                  trControl = myControl)
+                  trControl = myControl,
+                  metric = "P35")
 ```
-
+<br>
 
 ## Part 4: Identifying most relevant variables
 
-While the model selection process is complete, I thought it would be useful to give the manager a report of what variables in her data provided above average information for predicting credit worthiness. In addition to having her model, she may be able to use this information to make better decisions for collecting future data, especially in brainstorming related applicant information to the high quality varaibles or variables that acheive more detail.
+While the model selection process is complete, I thought it would be useful to give the manager a report of what variables in her data provided above average information for predicting credit worthiness. In addition to having her model, she may be able to use this information to make better decisions for collecting future data, especially in brainstorming related applicant information to the high quality varaibles or for developing new variables that acheive more detail in the areas that have the strongest predictive quality for determining creditability.
 
 First, each categorical varaible in the data set is split into separate binary predictors called dummy variables.
 ```{r}
@@ -614,74 +637,15 @@ fills <- rev(brewer.pal(6, "Blues"))
         axis.ticks.y = element_blank()) + xlab("Variable") + 
         ylab("Prediction Value") + ggtitle("Prediction Value Summary for Predictors with Above Average Values")
 ```
-
+<br>
 The plot above is one of the potential deliverables to the manager that summarizes the results nicely and compares the difference in prediction strength. The `combo.out` table could also be shared to give even more detailed results. 
 
 It appears the fourth category of `account_balance` has the highest prediction value for determining creditability. Notably, the varaibles not on this list do not have a strong predictive value for creditability.
 
 
 ## Conclusion
-```{r}
-set.seed(123)
-repeatedResamples = function(y, data, k = 10, reps=10) {
-    suppressWarnings(
-    for (idx in 1:reps) {
-         # Create custom indices: myFolds
-         myFolds <- createFolds(y, k = k)
 
-        # Create reusable trainControl object: myControl
-        myControl <- trainControl(summaryFunction = p35,
-                                  classProbs = TRUE, # IMPORTANT!
-                                  verboseIter = FALSE,
-                                  savePredictions = TRUE,
-                                  index = myFolds
-                                 )
-
-      
-        rf_fit = train(creditability ~ ., 
-                method = 'ranger',
-                tuneGrid = expand.grid(splitrule="maxstat",
-                alpha = 0.5),
-                control = ranger.control(minsplit = 1, minbucket = 1)
-                data = data,
-                trControl=myControl,
-                metric = "P35")
-        
-        rf2_fit = train(creditability ~ ., 
-                method = 'ranger',
-                tuneGrid = expand.grid(splitrule="maxstat",
-                alpha = 0.85),
-                data = data,
-                trControl=myControl,
-                metric = "P35")
-
-
-        rlda_fit = train(creditability ~ ., 
-                method = 'rlda', 
-                data = data,
-                trControl=myControl,
-                metric = "P35")
-        
-        # Create model_list
-        model_list <- list(rf=rf_fit, rf2=rf2_fit,rlda=rlda_fit)
-
-        if (idx == 1) {
-            # Pass model_list to resamples(): resamples
-            resamples <- resamples(model_list)
-        }
-        else {
-            current_resample = resamples(model_list)
-            resamples$values = bind_rows(resamples$values, current_resample$values)
-        }
-        
-    }
-    )
-       return(resamples) 
-    
-}
-fit_results = repeatedResamples(credit_select$creditability, credit_select)
-summary(fit_results)
-```
+The best model to predict creditability uses the Xgboost algorithm to fit a gradient boosted tree classification model to the data. The final model, when using a 0.7 cutoff threshold, is expected produce a per unit profit of 0.092. This expected performance is an increase of 0.147 in expected per unit profit over a no-information model that only predicts "Good" creditability has an expected per unit profit of -0.055. If the model meets this performance estimate, the bank should expect to earn a per applicant profit of $920 if the average loan amount is \$10,000.
 
 ## Appendix A: Tuning Hyperparamaters
 
@@ -707,7 +671,7 @@ For XGBoost, the following steps are conducted using the tuneGrid option in care
 The following code determines the best settings using 10X10 fold cross validation.
 
 
-```{r}
+```{r eval=FALSE}
 ## trainControl settings for hyperparameter tunning
 myControl <- trainControl(summaryFunction = p35,
                           classProbs = TRUE, # IMPORTANT!
@@ -755,24 +719,7 @@ results_list[[as.character(value)]] = fit$results
 
 
 ```{r}
-# XGB for Round 1
- # 1) Set eta = 0.1, max_depth = 5, min_child_weight = 1, gamma = 0, subsample = 0.8, colsample_bytree = 0.8
- #        a) Find the best nrounds = 300
- #    2) Set nrounds equal to best value from 1a
- #        a) Find the best max_depth = 2 and min_child_weight = 2
- #    3) Set max_depth and min_child_weight to best value from 2a
- #        a) Find the best gamma = 0.1
- #        b) Find the best nrounds = 300
- #    4) Set gamma to best value from 3a and set nrounds to the best value from 3b
- #        a) Find the best subsample = 1 and colsample_bytree = 1 
- #    5) Set subsample and colsample_bytree to best values from 4a
- #        a) IF REGULARIZING ONLY- Find best alpha or lambda values using seq(0,1,0.1)
- #        b) Find best eta = 0.07
- #    6) Set alpha and lambda to best values from 5a and eta to best value from 5b
- #        a) Find best nrounds 
-```
-
-```{r}
+# Record of Best Results
 round1_tuneGridRF = data.frame(mtry=11)
 
 round1_tuneGridXGB <- expand.grid(
