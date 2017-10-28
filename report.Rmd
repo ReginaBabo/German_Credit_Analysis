@@ -16,21 +16,19 @@ knitr::opts_chunk$set(echo = TRUE,fig.align='center', message = FALSE, warning=F
 
 ### Analysis Scenario
 
-A loan manager is requesting a statistical model to help her department determine which loan applicants are creditable, i.e. most likely to repay their loans. An applicant’s demographic and socio-economic profiles are considered by loan managers before a decision is made regarding his/her loan application. The manager's goal is to minimize risk and maximize profits for the bank's laon portfolio. The mananger shares the information that for the type of loans the model would apply to, if the borrower pays back the loan, the bank makes a profit of 35% of the loans value. On the other hand, if the borrower defaults, the bank's loss is 100%. The bank does not lose money for applicants who are rejected and the manager claims the model does that have to take into account opportunity cost for applicants who would have repaid the loan but were rejected.
+A loan manager is requesting a statistical model to help her department determine which loan applicants are creditable, i.e. most likely to repay their loans. An applicant’s demographic and socio-economic profiles are considered by loan managers before a decision is made regarding his/her loan application. The manager's goal is to minimize risk and maximize profits for the bank's loan portfolio. The manager shares the information that for the type of loans the model would predict, if the borrower pays back the loan, the bank makes a profit of 35% the value of the loan. On the other hand, if the borrower defaults, the bank's loss is 100%. The bank does not lose money for applicants who are rejected and the manager claims the model does that have to take into account opportunity cost for applicants who would have repaid the loan but were rejected.
 
-Upon receiving this request, I decide to develop a model for the manager that maximizes a profit-cost function given the provided data. The priority of the model fitting task will be prediction in this case as the manager has not specifically requested an interpretable model, but has requested a model with the best profit characteristics.
+Upon receiving this request, I decided to develop a model for the manager that maximizes a profit-cost function given the provided data. The priority of the model fitting task will be prediction in this case as the manager has not specifically requested an interpretable model, but has requested a model with the best profit characteristics.
 
 ### Data Source
 
-The loan manager gives you access to a sample of her department's loan data for 1000 applicants with the outcome of thier loans included. She claims the dataset was prepared by another analyst with her input to be representative of the bank's actual customers. 
+The loan manager gives you access to a sample of her department's loan data for 1000 applicants with the outcome of their loans included. She claims the dataset was prepared by another analyst with her input to be representative of the bank's actual customers. 
 
-The data used in this project was originally provided by Dr. Hans Hofmann of the University of Hamburg and hosted by the UCI Machine Learning Repository. The specific version of the data used here (`credit`) was sourced from Penn State's graduate-level Appplied Data Mining and Statistical Learning 897D course.
+The data used in this project was originally provided by Dr. Hans Hofmann of the University of Hamburg and hosted by the UCI Machine Learning Repository. The specific version of the data used here (`credit`) was sourced from Penn State's graduate-level Applied Data Mining and Statistical Learning 897D course.
 
-## Round 1: Exploratory Data Analysis, Loss Function, and Initial Model Fit
+## Round One: Exploratory Data Analysis, Loss Function, and Initial Model Fit
 
-### Summary
-
-To begin, the data must be loaded into the session and the variables checked to determine their appropriate types. Then, the variance of each predictor variable in relation to the response variable must be checked to ensure there are no zero variance predictors present. The profit/cost information must be programmed into a functional form that can be used to evalute the fitted models. Finally, an initial set of models is fit to the data to determine how best to proceed. 
+To begin, the data must be loaded into the session and the variables checked to determine their appropriate types. Then, the variance of each predictor variable in relation to the response variable must be checked to ensure there are no zero variance predictors present. The profit/cost information must be programmed into a functional form that can be used to evaluate the fitted models. Finally, an initial set of models is fit to the data to determine how best to proceed. 
 
 ### Load Packages
 
@@ -42,6 +40,9 @@ library(gridExtra)
 library(pander)
 library(stringr)
 library(woe)
+library(MASS)
+library(randomForest)
+library(xgboost)
 library(caret)
 library(tidyverse)
 ##Import Custom functions
@@ -52,7 +53,7 @@ if(!exists("get_best_cutoffs", mode="function")) source("./R/cutoff_check.R")
 
 ### Load the Data
 
-Many of the variable names are invalid such as "Duration of Credit (month)". The whitespaces and invalid parenthesis characters will likely cause problems in any programmatic use of these predictors.
+Many of the variable names are invalid such as "Duration of Credit (month)". The white spaces and invalid parenthesis characters will likely cause problems in any programmatic use of these predictors.
 
 ```{r load-data}
 # Load the data to a tibble dataframe using data.table::fread
@@ -72,7 +73,7 @@ credit %>% datatable(style="bootstrap")
 
 ### Variable Classifications
 
-The first step in exploring the data is determine what type of variables are present in the data. Are the variables categorical or quantitative? If they are categorical are they binary or do they have multiple levels?
+The first step in exploring the data is to determine what type of variables are present in the data. Are the variables categorical or quantitative? If they are categorical are they binary or do they have multiple levels?
 
 ```{r var-classification}
 # Force all variables to factors and count the number of unique levels present.
@@ -97,21 +98,21 @@ Fourteen non-binary categorical variables are present.
 
 Three quantitative variables are present. 
 
-Now, each variable type can explored.
+Now, each variable type can be explored.
 
 ### Examing the Response Variable
 
-First, the response variable is considered seperately as the distribution of the response variable must be determined.
+First, the response variable is considered separately as the distribution of the response variable must be determined.
 
 ```{r resp-table}
 CrossTable(credit$creditability)
 ```
 <br>
-`creditability` has two levels with 700 observations in the postive class and 300 observations in the negative class. If the data is representative of the loan applicants to the bank, about 70% of applicants can repay their loans and 30% cannot pay. The imbalance in the classes is noted for modeling as more information is available to classify the positive class, which may allow some models to result in good accuracy predicting the postive class, but poor accuracy predicting the negative class, while having good overall accuracy.
+`creditability` has two levels with 700 observations in the positive class and 300 observations in the negative class. If the data is representative of the loan applicants to the bank, about 70% of applicants can repay their loans and 30% cannot pay. The imbalance in the classes is noted for modeling as more information is available to classify the positive class, which may allow some models to result in good accuracy when predicting the positive class, but poor accuracy when predicting the negative class while having good overall accuracy.
 
 The current type of the data treats the classes as either a 1 or a 0. Let's refactor this variable so it is more interpretable. 
 
-```{r}
+```{r resp-table-2}
 # Assign the positive class 1, the label "Good" and the negative class 0, the label"Poor"
 credit$creditability = ifelse(credit$creditability == 1, "Good", "Poor")
 credit$creditability = factor(credit$creditability, levels=c("Good", "Poor"))
@@ -134,13 +135,15 @@ credit = credit %>% mutate_at(binary_names, factor)
 ```
 <br>
 
-The most crucial information to determine at this stage in the analysis is whether any of the predictors have zero variance. A predictor has zero variance when all of its values are indentical in respect to the response. For instance, if all observations of a predictor have only "Good" creditability. In such a case, the values of the predictor does not distinguish between the two classes in the response. Many models will fail to fit with zero variance predictors.  In addition, if any individual category of a predictor is zero in respect to the response, then the model fitting will fail as many models separate categorical variables into separate predictors. If any predictor category has zero instances with respect to the response, the model will fail to fit. 
+The most crucial information to determine at this stage in the analysis is whether any of the predictors have zero variance. A predictor has zero variance when all of its values are identical with respect to the response. For instance, if all observations of a predictor have only "Good" creditability. In such a case, the values of the predictor do not distinguish between the two classes in the response. Many models will fail to fit with zero variance predictors.  In addition, if any individual category of a predictor is zero in respect to the response, then the model fitting will fail as many models separate categorical variables into separate predictors. If any predictor category has zero instances with respect to the response, the model will fail to fit. 
+
+Any predictor categories with zero instances with respect to the response?
+```{r}
+length(checkConditionalX(credit[,binary_names] %>% select(-creditability), credit$creditability)) > 0
+```
+<br>
 
 ```{r near-zero-var-b, results = "asis"}
-# Any predictor categories with zero instances with respect to the response
-print("Any predictor categories with zero instances with respect to the response?")
-length(checkConditionalX(credit[,binary_names] %>% select(-creditability), credit$creditability)) > 0
-
 # Determine is any predictors has zero variance
 nzv = nearZeroVar(credit[,binary_names], names = TRUE, saveMetrics = TRUE) %>% select(-percentUnique)
 indexes = rownames(nzv)
@@ -148,7 +151,7 @@ pandoc.table(data.frame(indexes = indexes, nzv) %>% tbl_df %>% arrange(desc(freq
 ```
 <br>
 
-None of these binary predictors has zero variance, but `foreign_worker` has near zero variance with one class 26x more prevalant than the other in respect to `creditability`. This predictor will remain in the data, but this near zero variance will make it a likely candidate for removal later in the analysis.
+None of these binary predictors has zero variance, but `foreign_worker` has near zero variance with one class 26x more prevalent than the other in respect to `creditability`. This predictor will remain in the data, but this near zero variance will make it a likely candidate for removal later in the analysis.
 
 
 ### Non-binary Categorical Variables
@@ -165,11 +168,13 @@ credit = credit %>% mutate_at(nb_names, factor)
 
 These predictors are also checked for zero variance.
 
-```{r near-zero-var-nb, results = "asis", cache=TRUE}
-# Any predictor categories with zero instances with respect to the response
-print("Any predictor categories with zero instances with respect to the response??")
+Any predictor categories with zero instances with respect to the response?
+```{r}
 length(checkConditionalX(credit[,nb_names], credit$creditability)) > 0
+```
+<br>
 
+```{r near-zero-var-nb, results = "asis", cache=TRUE}
 # Determine is any predictors has zero variance
 nzv = nearZeroVar(credit[,nb_names], names = TRUE, saveMetrics = TRUE) %>% select(-percentUnique)
 indexes = rownames(nzv)
@@ -182,7 +187,7 @@ While `guarantors` has a high frequency ratio, none of these predictors is consi
 
 ### Continous Variables
 
-Finally, the continous variables are summarized.
+Finally, the continuous variables are summarized.
 
 ```{r quant-var-check, results="asis"}
 # Identify the names of the non-binary, categorical variables
@@ -218,7 +223,7 @@ grid.arrange(left,middle,center, ncol=1)
 
 ### Loss Function
 
-After a basic exploratory analysis of the variables, the first round of models can be fit to the data. However, in order to evalute the models, the profit-cost information must be functionalized. 
+After a basic exploratory analysis of the variables, the first round of models can be fit to the data. However, in order to evaluate the models, the profit-cost information must be functionalized. 
 
 ```{r}
 # Profit35 calculates the average profit given the predicted class values and the actual class values
@@ -249,25 +254,28 @@ p35 = function(data, lev = NULL, model = NULL) {
 
 This cost function can be tested using hypothetical predictions from the no-information model, which always predicts the most common class, "Good" and a perfect predictor which predicts all of the classes exactly the same as what is observed in the data.
 
+No-Information Model
 ```{r}
-print("No-Information Model")
 p35(data.frame(obs = credit$creditability, pred = factor(c(rep("Good", 1000)), levels = levels(credit$creditability))))
-print("Perfect Model")
+```
+
+Perfect Model
+```{r}
 p35(data.frame(obs = credit$creditability, pred = credit$creditability))
 ```
 <br>
 
-The no-information model has an accuracy of 70%, specficity of 0%, and a P35 value of -0.055. Thus, a dummy model that always issues loans regardless of creditability (labels all applicants as "Good") would be expected to have a 0.055 unit loss. If the average loan amount is \$10,000, then the total loss using this model would be \$550,000 and the per applicant loss is \$550. Note that specificity is included as the specificity (1 - False Positive Rate, or TN / sum(Predicted Negatives)) is going to be strongly related with the P35. This relationship exists because the cost function has a large penalty for false positives, the case when the model predicts an applicant is "Good" when they should be "Bad". This example also indicates how a model's accuracy can be decent at 70%, but expected unit profit is negative, a loss, reinforcing the importance of having both the specificity and P35 metrics included in the model's evaluation.
+The no-information model has an accuracy of 70%, specificity of 0%, and a P35 value of -0.055. Thus, a dummy model that always issues loans regardless of creditability (labels all applicants as "Good") would be expected to have a 0.055 unit loss. If the average loan amount is \$10,000, then the total loss using this model would be \$550,000 and the per applicant loss is \$550. Note that specificity is included as the specificity (1 - False Positive Rate, or TN / sum(Predicted Negatives)) is going to be strongly related with the P35. This relationship exists because the cost function has a large penalty for false positives, the case when the model predicts an applicant is "Good" when they should be "Bad". This example also indicates how a model's accuracy can be decent at 70%, but expected unit profit is negative, a loss, reinforcing the importance of having both the specificity and P35 metrics included in the model's evaluation.
 
 The perfect model has an accuracy of 100%, a specificity of 100%, and a P35 of 0.245. Thus, if a perfect model existed, it would have a 0.245 unit profit. If the average loan amount is \$10,000, then the total profit using this model would be \$2,450,000 and the per applicant profit is \$2450. In this case, the bank is only ever profiting, and thus, pockets a 35% profit on all loans. It is important that no model should ever exceed this hypothetical value and any model that comes close to it should be evaluated carefully as no model is perfect.   
 
-### Exploring Inital Model Space
+### Exploring the Initial Model Space
 
-As prediction quality is the priority for this problem, a range of different model types are evaluated at once to see if any particular model produces better predictions. The included models are Logistic Regression, Linear Discriminant Analysis, Random Forest, and XGBoost Gradient Boosted Trees.
+As prediction quality is the priority for this problem, a range of different model types is evaluated at once to see if any particular model produces better predictions. The included models are Logistic Regression, Linear Discriminant Analysis, Random Forest, and XGBoost Gradient Boosted Trees.
 
 Both Random Forest and XGBoost have hyperparameters that can be tuned. The following code block includes the hyperparameters set to their optimal values. For the code used to find the optimal values, see Appendix A.
 
-The models will be trained to maximize the per unit profit using the `p35` function. In order to get a more accurate estimate of the the per unit profit of each model, a 10x10 K-Fold Cross Validation (CV) process is used. Since multiple models are being compared, each model will be trained on the same set of folds.
+The models will be trained to maximize the per unit profit using the `p35` function. In order to get a more accurate estimate of the per unit profit of each model, a 10x10 K-Fold Cross Validation (CV) process is used. Since multiple models are being compared, each model will be trained on the same set of folds.
 
 ```{r round-one-fit, cache=TRUE}
 set.seed(123)
@@ -348,53 +356,17 @@ summary(report_dat)
 ```
 <br>
 
-Overall, the four models improved over the no-information rate with predicted per unit profits ranging from 0.054 to 0.071. The median of the metrics for each model's performance over the CV folds is used for the metric estimate as the median does not depend on the tail behavior of the performace metric distribution and, thus, is highly resistant to aberrant data points created during the k-fold process. 
+Overall, the four models improved over the performance of no-information model. The median of the metrics for each model's performance over the CV folds is used for the metric estimate as the median does not depend on the tail behavior of the performance metric distribution and, thus, is highly resistant to aberrant data points created during the k-fold process. 
 
-The best model for this round is the xgboost model. To determine the next steps for improving on these models, the variable importance for the xgboost is calculated.  
-```{r round-one-xgb-importance, cache=TRUE}
-# Fit the xgboost mdoel using the same settings
-set.seed(123)
-# Create custom indices: myFolds
-myFolds <- createCVFolds(credit$creditability, k = 10)
+The best model for this round is the xgboost model. 
 
-# Create reusable trainControl object: myControl
-myControl <- trainControl(summaryFunction = p35,
-                          classProbs = TRUE, # IMPORTANT!
-                          verboseIter = FALSE,
-                          savePredictions = TRUE,
-                          index = myFolds
-                            )
+Next concerns to consider:
 
-tuneGridXGB <- expand.grid(
-            nrounds=300,
-            max_depth = 2,
-            eta = 0.07,
-            gamma = 0.1,
-            colsample_bytree = 1,
-            subsample = 1,
-            min_child_weight = 2)
-        
-xgb_fit = train(creditability ~ ., 
-            method = 'xgbTree',
-            data = credit,
-            trControl= myControl,
-            tuneGrid = tuneGridXGB,
-            metric = "P35")
-
-# Plot the variable importance chart
-credit %>% select(-creditability) %>%
-           colnames(do.NULL = TRUE, prefix = "col") %>%
-           xgb.importance(model = xgb_fit$finalModel) %>%
-           xgb.plot.importance(top_n = 20)
-```
-<br>
-The variable importance plot displays the gain contribution of each feature to the model. For a boosted tree model, the gain of each feature of every tree is taken into account, then, the average gain per feature is calculated.
-
-There is a wide array of importance values with `account_balance` having the highest average gain, while `no_of_credits_at_this_bank` has almost a neglibile average gain. There are two conclusions one can draw from this disparity to improve model fit.
-
-1) Assuming the average gain derived from the xgboost model is proprotional to the information value of each of the predictors, it may be appropriate to introduce regularization into the model fitting procedure. Regularization introduces penalties for model complexity in order to reduce overfitting. Overfitting causes increases in model variance for out-of-sample predictions, which reduces model quality and accuracy. Since so many of the variables have low average gain relative to the others, it is possible the model will overfit the data to some extent by attempting to draw relationships from variables that little to no relationship with the response. Models like xgboost and random forests are more robust to this issue. But, the logistic regression and linear discriminant analysis are not robust to such issue and may improve from regularization.
+1) It may be appropriate to introduce regularization into the model fitting procedure. Regularization introduces penalties for model complexity in order to reduce overfitting. Overfitting causes increases in model variance for out-of-sample predictions, which reduces model quality and accuracy. Since so many of the variables have low average gain relative to the others, it is possible the model will overfit the data to some extent by attempting to draw relationships from variables that little to no relationship with the response. Models like xgboost and random forests are more robust to this issue. But, the logistic regression and linear discriminant analysis are not robust to such issue and may improve from regularization.
 
 2) Similar to above, some variables may be removed entirely to reduce prediction variance. This may include collapsing multiple predictor levels so that there are less unique values for each categorical predictor.
+
+***
 
 ## Round Two: Exploring Regularized Models 
 
@@ -463,16 +435,17 @@ summary(fit_results)
 
 The regularized logistic regression performed similarly to the logistic regression with a median per unit profit of 0.057 for the regularized logistic regression versus 0.055 for the logistic regression. The original logistic regression will be used going forward.
 
-On the other hand, the regularized linear discriminant analysis resulted in a per unit profit of 0.088 versus the linear discriminat analysis which ahd a per unti profit of 0.054. The "rlda" model's significant performance is related to its high Specificity of 0.533, resulting in a lower false positive rate which means less applicants with bad credit are classified as having good credit by the model. 
+On the other hand, the regularized linear discriminant analysis resulted in a per unit profit of 0.088 versus the linear discriminate analysis which had a per unit profit of 0.054. The "rlda" model's significant performance is related to its high Specificity of 0.77, resulting in a lower false positive rate which means fewer applicants with bad credit are classified as having good credit by the model. 
 
+***
 
-## Round 3: Prediction Probability Cutoff Threshold Optimization
+## Round Three: Prediction Probability Cutoff Threshold Optimization
 
-One of the assumptions that the analysis up to this point has made is that the cutoff threshold for determining whether a prediction belongs to the positve class or negative class is 0.5. This value means that if the model gives a prediction probability of greater than 0.5 then the prediciton will be "Good" and vica versa. This threshold changes the Sensitivity and Specificity of the model's performance. Since the profit-cost function is sensitive to a model's Specificity, which is inversely proportional to its False Positive Rate, the next step will be to modify the most promising models' prediction cutoff probabilities to favor a higher Specificity. In effect, if the the prediction probability cutoff value is increased above 0.5, then the model will be less likely to predict "Good" creditability, potentially reducing the number of "Good" predictions that are in fact "Poor" and increasing the per unit profit of the model.  
+One of the assumptions that the analysis up to this point has made is that the cutoff threshold for determining whether a prediction belongs to the positive class or negative class is 0.5. This value means that if the model gives a prediction probability of greater than 0.5 then the prediction will be "Good" and vice versa. This threshold changes the Sensitivity and Specificity of the model's performance. Since the profit-cost function is sensitive to a model's Specificity, which is inversely proportional to its False Positive Rate, the next step will be to modify the most promising models' prediction cutoff probabilities to favor a higher Specificity. In effect, if the prediction probability cutoff value is increased above 0.5, then the model will be less likely to predict "Good" creditability, potentially reducing the number of "Good" predictions that are in fact "Poor" and increasing the per unit profit of the model.  
 
 The functions for this step are found in the cutoff_check.R file and involve a 10x10 K-Fold Cross Validation similar to the validation procedures used previously in this analysis. The procedure evaluates cutoff values down to a 0.05 difference in values (0.50, 0.55, 0.6, etc).
 
-```{r cutoff-log, cache=TRUE}
+```{r cutoff-log, cache=TRUE, results = "asis"}
 # Determine best cutoff using 10x10 K-Fold Cross Validation
 best_cutoff = get_best_cutoffs(formula = creditability ~ ., data = credit, method = "glm", family="binomial", verbose = FALSE)
 best_cutoff %>% pandoc.table()
@@ -481,10 +454,10 @@ final_results = train_cv(formula = creditability ~ ., data = credit, , method = 
 log_perf = data.frame(value = final_results$P35, group="Logistic")
 ```
 <br>
-Staring with the Logistic Regression model, the best cutoff is 0.7, which increases the estimate of the model's per unit profit from 0.057 to 0.088.
+Starting with the Logistic Regression model, the best cutoff is 0.7, which increases the estimate of the model's per unit profit from 0.057 to 0.088.
 
 
-```{r cutoff-rf, cache=TRUE}
+```{r cutoff-rf, cache=TRUE, results = "asis"}
 # Determine best cutoff using 10x10 K-Fold Cross Validation
 round1_tuneGridRF = data.frame(mtry=11)
 best_cutoff = get_best_cutoffs(formula = creditability ~ ., data = credit, method = "rf", tuneGrid = round1_tuneGridRF, verbose=FALSE)
@@ -496,7 +469,8 @@ rf_perf = data.frame(value = final_results$P35, group="Random Forest")
 <br>
 The per unit profit estimate for the Random Forest model is improved from 0.034 to 0.087 using a cutoff of 0.7. 
 
-```{r cutoff-xgb, cache=TRUE}
+```{r cutoff-xgb, cache=TRUE, results = "asis"}
+# Determine best cutoff using 10x10 K-Fold Cross Validation
 round1_tuneGridXGB <- expand.grid(
             nrounds=300,
             max_depth = 2,
@@ -508,30 +482,35 @@ round1_tuneGridXGB <- expand.grid(
 
 best_cutoff = get_best_cutoffs(formula = creditability ~ ., data = credit, method = "xgbTree", tuneGrid = round1_tuneGridXGB, verbose=FALSE)
 best_cutoff %>% pandoc.table()
+# Save final results for comparison to other models
 final_results = train_cv(formula = creditability ~ ., data = credit, method = "xgbTree", tuneGrid=round1_tuneGridXGB, verbose=FALSE, cutoff = 0.7)
 xgb_perf = data.frame(value = final_results$P35, group="Xgboost")
 ```
 <br>
 The per unit profit estimate for the Xgboost model is improved from 0.054 to 0.092 using a cutoff of 0.7. This outcome is the best median CV performance seen so far.
 
-```{r cutoff-rlda, cache=TRUE}
+```{r cutoff-rlda, cache=TRUE, results = "asis"}
+# Determine best cutoff using 10x10 K-Fold Cross Validation
 round2_tuneGridrlda = data.frame(estimator = "Moore-Penrose Pseudo-Inverse")
 best_cutoff = get_best_cutoffs(formula = creditability ~ ., data = credit, method = "rlda", tuneGrid=round2_tuneGridrlda, verbose=FALSE)
 best_cutoff %>% pandoc.table()
+# Save final results for comparison to other models
 final_results = train_cv(formula = creditability ~ ., data = credit, method = "rlda", tuneGrid=round2_tuneGridrlda, verbose=FALSE, cutoff = 0.7)
 rlda_perf = data.frame(value = final_results$P35, group="Regularized LDA")
 ```
 <br>
-The per unit profit estimate for the Regularized LDA model is negligibly improved from 0.088 to 0.092 using a cutoff of 0.5. The small difference in performance 0f 0.004 between the models for the same cutoff value (since 0.5 is the default cutoff) is due to the variance caused by a different set of folds used in the 10x10 K-Fold CV for the best cutoff search process. This outcome gives evidence to the validity of the CV procedure as the performance estimatess for two entirely different sets of CV fols had similar median per unit profit values. 
+The per unit profit estimate for the Regularized LDA model is negligibly improved from 0.088 to 0.092 using a cutoff of 0.5. The small difference in performance 0f 0.004 between the models for the same cutoff value (since 0.5 is the default cutoff) is due to the variance caused by a different set of folds used in the 10x10 K-Fold CV for the best cutoff search process. This outcome gives evidence to the validity of the CV procedure as the performance estimates for two entirely different sets of CV folds had similar median per unit profit values. 
 
 ### Final Model Selection and Metrics
 
-With the best cutoffs selected for the models, all four of the fina lmodel candidates have similar performance metrics with the Xgboost and Regularized LDA models showing the best per unit profit estimates and the Logistic Regression and Random Forest models showing slightly worse results. However, the range of per unit profit estimates is only 0.005. Thus, these models have similar performance charactersitics. 
+With the best cutoffs selected for the models, all four of the final model candidates have similar performance metrics with the Xgboost and Regularized LDA models showing the best per unit profit estimates and the Logistic Regression and Random Forest models showing slightly worse results. However, the range of per unit profit estimates is only 0.005. Thus, these models have similar performance characteristics. 
 
-In order to make the final selection, the distribution of per unit profit esitmates for each of the ten repeated folds for each model with the optimum cutoff are plotted together in a density plot. The density plot shows the distribution of values that occured during the 10x10 K-Fold CV. Since the performance value produced from this procedure is an estimate of model performance, one can treat the probability density of each model's per unit profit estimates as representative of a sampling distribution of the actual model performance. 
+In order to make the final selection, the distribution of per unit profit estimates for each of the ten repeated CV folds for each model with the optimum cutoff values is plotted together in a density plot. The density plot shows the distribution of values that occurred during the 10x10 K-Fold CV. Since the performance value produced from this procedure is an estimate of model performance, one can treat the probability density of each model's per unit profit estimates as representative of a sampling distribution of the actual model performance. 
 
 ```{r final-fit, cache=TRUE}
+# Combine the four results dataframes from the previous section
 all_perf = bind_rows(log_perf, rf_perf, xgb_perf, rlda_perf)
+# Plot the distributions
 all_perf %>% ggplot(aes(x = value, fill=group, color=group)) + 
                     geom_density(alpha=0.3) +
                     theme(legend.position=c(0.2, 0.8), plot.title = element_text(hjust = 0.5)) +
@@ -543,7 +522,7 @@ all_perf %>% ggplot(aes(x = value, fill=group, color=group)) +
 ```
 <br>
 
-Looking at this plot it is clear that no one model is significantly better than another due to the high overlap in distributions. However, if one had to chosoe a model, the Xgboost model has the relatively most favorable mode with a greater density over higher per unit profit estimate values. The relatively worse model would be the Logistic Regression as it as a greater variance in values than the other models and is, thus, expected to have a more unpredictable performance when used on out-of-sample data.
+Looking at this plot it is clear that no one model is significantly better than another due to the high overlap in distributions. However, if one had to choose a model, the Xgboost model has the relatively most favorable model with a greater density over higher per unit profit estimate values. The relatively worse model would be the Logistic Regression as it as a greater variance in values than the other models and is, thus, expected to have a more unpredictable performance when used on out-of-sample data.
 
 The final model is fit to the data using 10x10 K-Fold CV. In order to use the model on new predictions, a conditional transformation using the model's predictions probabilities for the class "Good" would have to be performed using a cutoff threshold of 0.7. 
 ```{r}
@@ -566,13 +545,14 @@ final_fit = train(creditability ~ .,
                   trControl = myControl,
                   metric = "P35")
 ```
-<br>
 
-## Part 4: Identifying most relevant variables
+***
 
-While the model selection process is complete, I thought it would be useful to give the manager a report of what variables in her data provided above average information for predicting credit worthiness. In addition to having her model, she may be able to use this information to make better decisions for collecting future data, especially in brainstorming related applicant information to the high quality varaibles or for developing new variables that acheive more detail in the areas that have the strongest predictive quality for determining creditability.
+## Part Four: Identifying most relevant variables
 
-First, each categorical varaible in the data set is split into separate binary predictors called dummy variables.
+While the model selection process is complete, I thought it would be useful to give the manager a report of what variables in her data provided above average information for predicting creditworthiness. In addition to having her model, she may be able to use this information to make better decisions for collecting future data, especially in brainstorming related applicant information to the high-quality variables or for developing new variables that achieve more detail in the areas that have the strongest predictive quality for determining creditability.
+
+First, each categorical variable in the data set is split into separate binary predictors called dummy variables.
 ```{r}
 dummies <- dummyVars(creditability ~ ., data = credit)
 dummies = predict(dummies, newdata = credit) %>% tbl_df
@@ -582,17 +562,15 @@ dummies$creditability = credit$creditability
 
 Then, two methods of determining variable predictive information are combined to determine the predictive quality of each variable:
 
-1) From the `woe` package, the Information Value (IV) is concept used in risk management to assess predictive power of variable calculated from the WoE (Weight of Evidence).
-WoE = \ln(\frac{\%good_i}{\%bad_i})
-IV = Σ_{i=1}^{n}(\ln(\frac{\%good_i}{\%bad_i})*(\%good_i - \%bad_i))
+1. From the `woe` package, the Information Value (IV) is concept used in risk management to assess predictive power of variable calculated from the WoE (Weight of Evidence).
 
-2) From the `xgboost` package, the `xgb.importance` function calculates the gain for each predictor varaible. The gain gives you indication about the information of how a feature is important in making a branch of a decision tree such as those produced by the "xgbTree" method. 
+2. From the `xgboost` package, the `xgb.importance` function calculates the gain for each predictor variable. The gain gives you an indication of how important a predictor is in how it causes branches of a decision tree such as those produced by the "xgbTree" method. 
 
-Both the IV and the Gain are scaled and normalized and then averaged. Either of these methods is adequate on its own, but the process can confirm each other when combined for more confidence in the results.
+Both the IV and the Gain are scaled and normalized and then averaged. Either of these methods is adequate on its own, but the process can confirm each other when combined together to increase confidence in the results.
 
 ```{r}
 set.seed(123)
-## Find Inofrmation Value for each variable
+## Find Information Value for each variable
 invisible(capture.output(IV <- iv.mult(as.data.frame(dummies),"creditability", summary = TRUE)))
 
 ## Find Gain for each varaible
@@ -640,12 +618,15 @@ fills <- rev(brewer.pal(6, "Blues"))
 <br>
 The plot above is one of the potential deliverables to the manager that summarizes the results nicely and compares the difference in prediction strength. The `combo.out` table could also be shared to give even more detailed results. 
 
-It appears the fourth category of `account_balance` has the highest prediction value for determining creditability. Notably, the varaibles not on this list do not have a strong predictive value for creditability.
+It appears the fourth category of `account_balance` has the highest predictive value for determining creditability. Notably, the variables not on this list do not have a strong predictive value for creditability.
 
+***
 
 ## Conclusion
 
 The best model to predict creditability uses the Xgboost algorithm to fit a gradient boosted tree classification model to the data. The final model, when using a 0.7 cutoff threshold, is expected produce a per unit profit of 0.092. This expected performance is an increase of 0.147 in expected per unit profit over a no-information model that only predicts "Good" creditability has an expected per unit profit of -0.055. If the model meets this performance estimate, the bank should expect to earn a per applicant profit of $920 if the average loan amount is \$10,000.
+
+***
 
 ## Appendix A: Tuning Hyperparamaters
 
@@ -653,20 +634,21 @@ Both Random Forests and XGBoosted Trees have tunable hyperparameters.
 
 For Random Forest, the hyperparameter is "mtry". To determine the best mtry, a standard three value search is performed for a small, medium, and large value of mtry.
 
-For XGBoost, the following steps are conducted using the tuneGrid option in caret:train - adapted from ("https://www.analyticsvidhya.com/blog/2016/03/complete-guide-parameter-tuning-xgboost-with-codes-python/"):
-    1) Set eta = 0.1, max_depth = 5, min_child_weight = 1, gamma = 0, subsample = 0.8, colsample_bytree = 0.8
-        a) Find the best nrounds by using seq(from = 50, to = 950, by = 50)
-    2) Set nrounds equal to best value from 1a
-        a) Find the best max_depth by using seq(1,10,1) and min_child_weight by suing seq(1,6,1) in the same call to train
-    3) Set max_depth and min_child_weight to best value from 2a
-        a) Find the best gamma using seq(0,0.5,0.1)
-        b) Find the best nrounds by using seq(from = 50, to = 950, by = 50)
-    4) Set gamma to best value from 3a and set nrounds to the best value from 3b
-        a) Find the best subsample and colsample_bytree using seq(0.6,1,0.05) in the same call to train
-    5) Set subsample and colsample_bytree to best values from 4a
-        a) IF REGULARIZING ONLY- Find best alpha or lambda values using seq(0,1,0.1)
-        b) Find best eta using seq(0.01,0.1,0.01)
-    6) Set alpha and lambda to best values from 5a and eta to best value from 5b
+For XGBoost, the following steps are conducted using the tuneGrid option in caret:train - adapted from ("https://www.analyticsvidhya.com/blog/2016/03/complete-guide-parameter-tuning-xgboost-with-codes-python/"): <br>
+
+    1. Set eta = 0.1, max_depth = 5, min_child_weight = 1, gamma = 0, subsample = 0.8, colsample_bytree = 0.8
+        a. Find the best nrounds by using seq(from = 50, to = 950, by = 50)
+    2. Set nrounds equal to best value from 1a
+        a. Find the best max_depth by using seq(1,10,1) and min_child_weight by suing seq(1,6,1) in the same call to train
+    3. Set max_depth and min_child_weight to best value from 2a
+        a. Find the best gamma using seq(0,0.5,0.1)
+        b. Find the best nrounds by using seq(from = 50, to = 950, by = 50)
+    4. Set gamma to best value from 3a and set nrounds to the best value from 3b
+        a. Find the best subsample and colsample_bytree using seq(0.6,1,0.05) in the same call to train
+    5. Set subsample and colsample_bytree to best values from 4a
+        a. IF REGULARIZING ONLY- Find best alpha or lambda values using seq(0,1,0.1)
+        b. Find best eta using seq(0.01,0.1,0.01)
+    6. Set alpha and lambda to best values from 5a and eta to best value from 5b
 
 The following code determines the best settings using 10X10 fold cross validation.
 
@@ -682,7 +664,7 @@ myControl <- trainControl(summaryFunction = p35,
                           repeats = 5
 )
 
-### Unique model tuning grid for tunable parameters ###
+### Unique model tuning grid for tunable parameters
 tuneGridXGB <- expand.grid(
     nrounds=300,
     max_depth = 2,
