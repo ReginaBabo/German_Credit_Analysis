@@ -1,5 +1,40 @@
 
-train_cv = function(formula, data, method, cutoff = 0.5, k = 10, reps = 10, verboseIter = TRUE, seed = 123, ...) {
+#' @title Repeated K-Fold Cross Validation Tuner
+#'
+#' @description
+#' Wrapper for caret::train that allows training of non-tunable parameters.
+#' Validates models using repeated k-fold cross validation
+#'
+#' @param formula formula of form y ~ x passed to caret::train
+#' @param data data frame from which variables specified in formula are
+#' preferentially to be taken
+#' @param method a string specifying which classification or regression model
+#' to use for caret::train
+#' @param cutoff What probability to use to predict positive class (first class
+#'  in factor levels for y)
+#' @param k number of folds for k-fold cross validation
+#' @param reps number of times to repeat k-fold validation
+#' @param verboseIter whether iterations of the cross validation are printed
+#' to the console
+#' @param seed random seed to set for reproducible results
+#' @param summaryFunction a function to compute performance metrics across
+#' resamples passed to caret::trainControl.
+#' @param ... arguments passed to caret::train and the classification or
+#' regression routine (such as randomForest) .
+#' @importFrom caret dplyr createCVFolds.R
+#' @return a results dataframe for the accuracy metrics passed to
+#' summaryFunction for the repeated k-fold cross validation
+#' @examples
+#' train_cv(creditability ~ .,
+#'          data = credit,
+#'          method = "rf",
+#'          tuneGrid = tuneGridRF,
+#'          cutoff = 0.5)
+#' @name train_cv
+NULL
+#' @export
+
+train_cv = function(formula, data, method, cutoff = 0.5, k = 10, reps = 10, verboseIter = TRUE, seed = 123, summaryFunction = p35, ...) {
     results = data.frame()
     set.seed(seed)
     for (idx in 1:reps) {
@@ -13,7 +48,7 @@ train_cv = function(formula, data, method, cutoff = 0.5, k = 10, reps = 10, verb
             test = data[-fold_idx,]
 
             ## Fit Model to Fold and produce results
-            myControl <- trainControl(summaryFunction = p35,
+            myControl <- trainControl(summaryFunction = summaryFunction,
                                       classProbs = TRUE, # IMPORTANT!
                                       verboseIter = verboseIter,
                                       savePredictions = TRUE,
@@ -32,24 +67,54 @@ train_cv = function(formula, data, method, cutoff = 0.5, k = 10, reps = 10, verb
             if (method == "rlda") {
                 pos_class_idx = 2
             }
-
-            pred = predict(mod_fit, test, type="prob")[,pos_class_idx]
-            pred = ifelse(pred > cutoff, "X1", "X0")
+            obs = test[,all.vars(as.formula(formula))[1]][[1]]
+            pred = predict(mod_fit, test, type = "prob")[,pos_class_idx]
+            pred = ifelse(pred > cutoff, "Good", "Poor") %>% factor(levels = levels(obs))
 
             out = data.frame(obs = test[,all.vars(as.formula(formula))[1]][[1]],
                              pred = factor(pred, levels=levels(test[,all.vars(as.formula(formula))[1]][[1]])))
 
             new = p35(out)
-
             results = rbind(results, new)
         }
-
     }
     names(results) = c("Accuracy","Specificity","P35")
     return(results)
 }
 
-train_cv(creditability ~ ., data = credit, method = "rf", tuneGrid = tuneGridRF, cutoff = 0.5)
+
+#' @title Cutoff Seeker - Values 0 to 1
+#'
+#' @description
+#' Given three parameter values runs train_cv for each value to determine
+#' accuracy for repeated k-fold cross validation
+#'
+#' @param formula formula of form y ~ x passed to caret::train
+#' @param data data frame from which variables specified in formula are
+#' preferentially to be taken
+#' @param method a string specifying which classification or regression model
+#' to use for caret::train
+#' @param low lowest of the parameter value options
+#' @param mid paramater value greater than low, but smaller than high
+#' @param high greatest of the parameter value options
+#' @param k number of folds for k-fold cross validation
+#' @param reps number of times to repeat k-fold validation
+#' @param verboseIter whether iterations of the cross validation are printed
+#' to the console
+#' @param seed random seed to set for reproducible results
+#' @param ... arguments passed to train_cv, caret::train, or the classification or
+#' regression routine (such as randomForest) .
+#' @importFrom caret dplyr createCVFolds.R
+#' @return a list of results dataframe for the accuracy metrics from train_cv
+#' for each paramater value
+#' @examples
+#'cutoff_seq(formula = creditability ~ .,
+#'           data = credit,
+#'           method = "rf",
+#'           tuneGrid = tuneGridRF)
+#' @name cutoff_seq
+NULL
+#' @export
 
 cutoff_seq = function(formula, data, method, low = 0.25, mid = 0.5, high = 0.75, k = 10, reps = 10, verboseIter = TRUE, seed = 123, ...) {
     cutoff_options = list()
@@ -69,7 +134,24 @@ cutoff_seq = function(formula, data, method, low = 0.25, mid = 0.5, high = 0.75,
 }
 
 
-cutoff_seq(formula = creditability ~ ., data = credit, method = "rf", tuneGrid = tuneGridRF)
+#' @title Parameter Refiner - Values 0 to 1
+#'
+#' @description
+#' Given difference between parameters, and parameter value with best performance,
+#' generates a new set of paramters to drive with smaller differences in values
+#'
+#' @param by difference between prior parameter settings
+#' @param index_max index of best parameter from prior performance check -
+#' 1 = low, 2 = mid, 3 = high
+#' @param key_max best parameter setting as a character vector (name)
+#' @importFrom caret dplyr createCVFolds.R
+#' @return a list of low, mid, and high paramter values for further performance testing
+#' @examples
+#' get_next_cutoffs(by = 0.25, index_max = 2, key_max = "0.5")
+#' @name get_next_cutoffs
+NULL
+#' @export
+
 
 get_next_cutoffs = function(by, index_max, key_max) {
     new_by = by - 0.10
@@ -119,10 +201,39 @@ get_next_cutoffs = function(by, index_max, key_max) {
     }
 }
 
-get_best_cutoffs = function(formula, data, method, low = 0.25, mid = 0.5, high = 0.75, by = 0.25, k = 10, reps = 10, seed = 123, ...) {
+#' @title Find the best parameter setting through search with cross validation
+#'
+#' @description
+#' Given three parameter values runs train_cv for each value to determine
+#' accuracy for repeated k-fold cross validation
+#'
+#' @param formula formula of form y ~ x passed to caret::train
+#' @param data data frame from which variables specified in formula are
+#' preferentially to be taken
+#' @param method a string specifying which classification or regression model
+#' to use for caret::train
+#' @param low lowest of the parameter value options
+#' @param mid paramater value greater than low, but smaller than high
+#' @param high greatest of the parameter value options
+#' @param by difference between low, mid, and high parameter options
+#' @param k number of folds for k-fold cross validation
+#' @param reps number of times to repeat k-fold validation
+#' @param seed random seed to set for reproducible results
+#' @param status_updates whether iterations of the parameter search progress are
+#' printed to the console
+#' @param target_metric_name name of the metric using to select best parameter
+#' @param ... arguments passed to train_cv, caret::train, or the classification or
+#' regression routine (such as randomForest) .
+#' @importFrom caret dplyr createCVFolds.R
+#' @return returns single row dataframe with best parameter setting and metric
+#' @name get_next_cutoffs
+NULL
+#' @export
+
+get_best_cutoffs = function(formula, data, method, low = 0.25, mid = 0.5, high = 0.75, by = 0.25, k = 10, reps = 10, seed = 123, status_updates = FALSE, target_metric_name = "P35", ...) {
     while(by > 0) {
-        medians = lapply(cutoff_seq(low = low, mid = mid, high = high, formula = formula, data = data, method = method, k = k, reps = reps, seed = seed,...), function(x) { median(x$P35) })
-        if (by == 0.25) {
+        medians = lapply(cutoff_seq(low = low, mid = mid, high = high, formula = formula, data = data, method = method, k = k, reps = reps, seed = seed,...), function(x) { median(x[[target_metric_name]]) })
+        if (by == 0.25 & status_updates) {
             print(list(init_cutoff = as.numeric(names(medians)[2]), init_metric = medians[[2]]))
         }
         index_max = which.max(medians)
@@ -134,54 +245,9 @@ get_best_cutoffs = function(formula, data, method, low = 0.25, mid = 0.5, high =
         mid = new_cutoffs$mid
         high = new_cutoffs$high
         by = new_cutoffs$by
-        print(list(round_cutoff = as.numeric(key_max), round_metric = value_max))
+        if (status_updates) {
+            print(list(round_cutoff = as.numeric(key_max), round_metric = value_max))
+        }
     }
-    return(list(best_cutoff = mid, best_metric = value_max))
+    return(data.frame(method = method, best_cutoff = mid, best_metric_median = value_max))
 }
-
-
-
-# log
-get_best_cutoffs(formula = creditability ~ ., data = credit, method = "glm", family="binomial", verbose=FALSE)
-
-# 0.7 0.09025 - credit_select
-# 0.7 0.0915 - credit_select
-
-
-#rf
-tuneGridRF = data.frame(mtry=54)
-
-get_best_cutoffs(formula = creditability ~ ., data = credit_select, method = "rf", tuneGrid = tuneGridRF, verbose= FALSE)
-
-
-#log_reg
-tuneGridLogReg = expand.grid(
-    cost = 2,
-    loss = "L1",
-    epsilon = 0.001)
-
-get_best_cutoffs(formula = creditability ~ ., data = credit_select, method = "regLogistic", tuneGrid = tuneGridLogReg, verbose=FALSE)
-
-#rlda
-tuneGridRLDA = data.frame(estimator="Schafer-Strimmer")
-
-get_best_cutoffs(formula = creditability ~ ., data = credit, method = "rlda", tuneGrid=tuneGridRLDA,verbose=FALSE)
-
-get_best_cutoffs(formula = creditability ~ ., data = credit, method = "qda", verbose=FALSE)
-
-#xgb
-tuneGridXGB <- expand.grid(
-    nrounds=150,
-    max_depth = 4,
-    eta = 0.1,
-    gamma = 0,
-    colsample_bytree = 0.7,
-    subsample = 0.75,
-    min_child_weight = 1)
-
-get_best_cutoffs(low = 0.25, mid = 0.5, high = 0.75, by = 0.25, formula = creditability ~ ., data = credit_select, method = "xgbTree", tuneGrid = tuneGridXGB, verbose = 0)
-
-
-
-
-

@@ -46,7 +46,7 @@ library(caret)
 library(tidyverse)
 ##Import Custom functions
 if(!exists("createCVFolds", mode="function")) source("./R/createCVFolds.R")
-
+if(!exists("get_best_cutoffs", mode="function")) source("./R/cutoff_check.R")
 ```
 <br>
 
@@ -269,7 +269,7 @@ Both Random Forest and XGBoost have hyperparameters that can be tuned. The follo
 
 The models will be trained to maximize the per unit profit using the `p35` function. In order to get a more accurate estimate of the the per unit profit of each model, a 10x10 K-Fold Cross Validation (CV) process is used. Since multiple models are being compared, each model will be trained on the same set of folds.
 
-```{r}
+```{r round-one-fit, cache=TRUE}
 set.seed(123)
 repeatedResamples = function(y, k = 10, reps=10) {
     suppressWarnings(
@@ -351,7 +351,7 @@ summary(report_dat)
 Overall, the four models improved over the no-information rate with predicted per unit profits ranging from 0.054 to 0.071. The median of the metrics for each model's performance over the CV folds is used for the metric estimate as the median does not depend on the tail behavior of the performace metric distribution and, thus, is highly resistant to aberrant data points created during the k-fold process. 
 
 The best model for this round is the xgboost model. To determine the next steps for improving on these models, the variable importance for the xgboost is calculated.  
-```{r}
+```{r round-one-xgb-importance, cache=TRUE}
 # Fit the xgboost mdoel using the same settings
 set.seed(123)
 # Create custom indices: myFolds
@@ -392,15 +392,15 @@ The variable importance plot displays the gain contribution of each feature to t
 
 There is a wide array of importance values with `account_balance` having the highest average gain, while `no_of_credits_at_this_bank` has almost a neglibile average gain. There are two conclusions one can draw from this disparity to improve model fit.
 
-1) Assuming the average gain derived from the xgboost model is proprotional to the information value of each of the predictors, it may be appropriate to introduce regularization into the model fitting procedure. Regularization introduces penalties for model complexity in order to reduce overfitting. Overfitting causes increases in mode lvariance for out-of-sample predictions, which reduces model quality and accuracy. Since so many of the variables have low average gain relative to the others, it is possible the model will overfit the data to some extent by attempting to draw relationships from variables that little to no relationship with the response. Models like xgboost and random forests are more robust to this issue. But, the logistic regression and linear discriminant analysis are not robust to such issue and may improve from regularization.
+1) Assuming the average gain derived from the xgboost model is proprotional to the information value of each of the predictors, it may be appropriate to introduce regularization into the model fitting procedure. Regularization introduces penalties for model complexity in order to reduce overfitting. Overfitting causes increases in model variance for out-of-sample predictions, which reduces model quality and accuracy. Since so many of the variables have low average gain relative to the others, it is possible the model will overfit the data to some extent by attempting to draw relationships from variables that little to no relationship with the response. Models like xgboost and random forests are more robust to this issue. But, the logistic regression and linear discriminant analysis are not robust to such issue and may improve from regularization.
 
 2) Similar to above, some variables may be removed entirely to reduce prediction variance. This may include collapsing multiple predictor levels so that there are less unique values for each categorical predictor.
 
 ## Round Two: Exploring Regularized Models 
 
-For round two, the goal will be to use regularization in each model fitting procedure to see if the fit improves. Random forests do not have a regularization feature so the same settings will be used for the "rf" model. Otherwise, the method "regLogistic" for regularized logistic regression, "rlda" for regularized lienar discriminant analysis, and the alpha and lambda settings for xgboost will be used. 
+For round two, the goal will be to use regularization in the models that do not involve trees. The method "regLogistic" will be used for regularized logistic regression and "rlda" for regularized linear discriminant analysis.
 
-```{r}
+```{r round-two-fit, cache=TRUE}
 set.seed(123)
 repeatedResamples = function(y, data, k = 10, reps=10) {
     suppressWarnings(
@@ -415,49 +415,31 @@ repeatedResamples = function(y, data, k = 10, reps=10) {
                                   savePredictions = TRUE,
                                   index = myFolds
                                  )
-
+        
+        round2_tuneGridRegLog = expand.grid(
+                cost = 1,
+                loss = "L1",
+                epsilon = 0.01
+        )
+        
        log_reg_fit = train(creditability ~ ., 
                 method = 'regLogistic', 
                 data = data,
                 trControl=myControl,
+                tuneGrid = round2_tuneGridRegLog, 
                 metric = "P35")
-
+        
+       round2_tuneGridrlda = data.frame(estimator = "Moore-Penrose Pseudo-Inverse")
+       
         rlda_fit = train(creditability ~ ., 
                 method = 'rlda', 
                 data = data,
                 trControl=myControl,
-                metric = "P35")
-        
-        tuneGridRF = data.frame(
-                mtry=11
-            )
-        
-        rf_fit = train(creditability ~ ., 
-                        method = 'rf', 
-                        data = credit,
-                        trControl=myControl,
-                        tuneGrid=tuneGridRF,
-                        metric = "P35")
-        
-        tuneGridXGB <- expand.grid(
-            nrounds=150,
-            max_depth = 1,
-            eta = 0.45,
-            gamma = 0.2,
-            colsample_bytree = 0.65,
-            subsample = 0.95,
-            min_child_weight = 2)
-
-        xgb_reg_fit = train(creditability ~ ., 
-                method = 'xgbTree',
-                data = data,
-                trControl= myControl,
-                tuneGrid = tuneGridXGB,
-                alpha = 0.45,
+                tuneGrid = round2_tuneGridrlda,
                 metric = "P35")
 
         # Create model_list
-        model_list <- list(log_reg = log_reg_fit, rlda = rlda_fit, rf = rf_fit, xgb=xgb_reg_fit)
+        model_list <- list(log_reg = log_reg_fit, rlda = rlda_fit)
 
         if (idx == 1) {
             # Pass model_list to resamples(): resamples
@@ -477,187 +459,165 @@ repeatedResamples = function(y, data, k = 10, reps=10) {
 fit_results = repeatedResamples(credit$creditability, credit)
 summary(fit_results)
 ```
+<br>
 
-## Round 3: Feature Engineering for Dimension Reduction
+The regularized logistic regression performed similarly to the logistic regression with a median per unit profit of 0.057 for the regularized logistic regression versus 0.055 for the logistic regression. The original logistic regression will be used going forward.
 
+On the other hand, the regularized linear discriminant analysis resulted in a per unit profit of 0.088 versus the linear discriminat analysis which ahd a per unti profit of 0.054. The "rlda" model's significant performance is related to its high Specificity of 0.533, resulting in a lower false positive rate which means less applicants with bad credit are classified as having good credit by the model. 
+
+
+## Round 3: Prediction Probability Cutoff Threshold Optimization
+
+
+```{r cutoff-log, cache=TRUE}
+best_cutoff = get_best_cutoffs(formula = creditability ~ ., data = credit, method = "glm", family="binomial", verbose = FALSE)
+best_cutoff %>% pandoc.table()
+final_results = train_cv(formula = creditability ~ ., data = credit, , method = "glm", family="binomial", verbose=FALSE, cutoff = 0.7)
+log_perf = data.frame(value = final_results$P35, group="Logistic")
+```
+
+```{r cutoff-rf, cache=TRUE}
+round1_tuneGridRF = data.frame(mtry=11)
+best_cutoff = get_best_cutoffs(formula = creditability ~ ., data = credit, method = "rf", tuneGrid = round1_tuneGridRF, verbose=FALSE)
+best_cutoff %>% pandoc.table()
+final_results = train_cv(formula = creditability ~ ., data = credit, , method = "rf", tuneGrid = round1_tuneGridRF, verbose=FALSE, cutoff = 0.7)
+rf_perf = data.frame(value = final_results$P35, group="Random Forest")
+```
+
+```{r cutoff-xgb, cache=TRUE}
+round1_tuneGridXGB <- expand.grid(
+            nrounds=300,
+            max_depth = 2,
+            eta = 0.07,
+            gamma = 0.1,
+            colsample_bytree = 1,
+            subsample = 1,
+            min_child_weight = 2)
+
+best_cutoff = get_best_cutoffs(formula = creditability ~ ., data = credit, method = "xgbTree", tuneGrid = round1_tuneGridXGB, verbose=FALSE)
+best_cutoff %>% pandoc.table()
+final_results = train_cv(formula = creditability ~ ., data = credit, method = "xgbTree", tuneGrid=round1_tuneGridXGB, verbose=FALSE, cutoff = 0.7)
+xgb_perf = data.frame(value = final_results$P35, group="Xgboost")
+```
+
+```{r cutoff-rlda, cache=TRUE}
+round2_tuneGridrlda = data.frame(estimator = "Moore-Penrose Pseudo-Inverse")
+best_cutoff = get_best_cutoffs(formula = creditability ~ ., data = credit, method = "rlda", tuneGrid=round2_tuneGridrlda, verbose=FALSE)
+best_cutoff %>% pandoc.table()
+final_results = train_cv(formula = creditability ~ ., data = credit, method = "rlda", tuneGrid=round2_tuneGridrlda, verbose=FALSE, cutoff = 0.7)
+rlda_perf = data.frame(value = final_results$P35, group="Regularized LDA")
+```
+
+
+### Final Model Selection and Metrics
+
+```{r final-fit, cache=TRUE}
+all_perf = bind_rows(log_perf, rf_perf, xgb_perf, rlda_perf)
+all_perf %>% ggplot(aes(x = value, fill=group, color=group)) + 
+                    geom_density(alpha=0.3) +
+                    theme(legend.position=c(0.2, 0.8), plot.title = element_text(hjust = 0.5)) +
+                    labs(title = "Density of `audience_score` by `feature_film`", 
+                         y = "P(Per Unit Profit)", 
+                         x = "Per Unit Profit", 
+                         fill = "Model Type",
+                         color = "Model Type")
+```
+
+
+```{r}
+set.seed(123)
+# Create custom indices: myFolds
+myFolds <- createCVFolds(credit$creditability, k = 10)
+
+# Create reusable trainControl object: myControl
+myControl <- trainControl(summaryFunction = p35,
+                          classProbs = TRUE, # IMPORTANT!
+                          verboseIter = FALSE,
+                          savePredictions = TRUE,
+                          index = myFolds
+                            )
+
+final_fit = train(creditability ~ .,
+                  data = credit,
+                  method = "xgbTree",
+                  tuneGrid = round1_tuneGridXGB,
+                  trControl = myControl)
+```
+
+
+## Part 4: Identifying most relevant variables
+
+While the model selection process is complete, I thought it would be useful to give the manager a report of what variables in her data provided above average information for predicting credit worthiness. In addition to having her model, she may be able to use this information to make better decisions for collecting future data, especially in brainstorming related applicant information to the high quality varaibles or variables that acheive more detail.
+
+First, each categorical varaible in the data set is split into separate binary predictors called dummy variables.
 ```{r}
 dummies <- dummyVars(creditability ~ ., data = credit)
 dummies = predict(dummies, newdata = credit) %>% tbl_df
 dummies$creditability = credit$creditability
 ```
+<br>
 
-```{r fig.height=10}
-set.seed(123)
-IV = iv.mult(as.data.frame(dummies),"creditability", summary = TRUE, verbose = FALSE)
-IV %>% iv.plot.summary
-```
+Then, two methods of determining variable predictive information are combined to determine the predictive quality of each variable:
 
+1) From the `woe` package, the Information Value (IV) is concept used in risk management to assess predictive power of variable calculated from the WoE (Weight of Evidence).
+WoE = \ln(\frac{\%good_i}{\%bad_i})
+IV = Σ_{i=1}^{n}(\ln(\frac{\%good_i}{\%bad_i})*(\%good_i - \%bad_i))
+
+2) From the `xgboost` package, the `xgb.importance` function calculates the gain for each predictor varaible. The gain gives you indication about the information of how a feature is important in making a branch of a decision tree such as those produced by the "xgbTree" method. 
+
+Both the IV and the Gain are scaled and normalized and then averaged. Either of these methods is adequate on its own, but the process can confirm each other when combined for more confidence in the results.
 
 ```{r}
 set.seed(123)
+## Find Inofrmation Value for each variable
+invisible(capture.output(IV <- iv.mult(as.data.frame(dummies),"creditability", summary = TRUE)))
+
+## Find Gain for each varaible
 X = dummies %>% dplyr::select(-creditability)
 library(xgboost)
 # Prep data for xgboost
 x_num = as.matrix(X) %>% apply(2,as.numeric)
-x_label = as.numeric(as.character(ifelse(dummies$creditability == "X1", 1, 0)))
+x_label = as.numeric(as.character(ifelse(dummies$creditability == "Good", 1, 0)))
 x_matrix = xgboost::xgb.DMatrix(data = x_num, label = x_label)
-# Fit the model
+# Fit the model using xgboost settings from analysis
 bst <- xgboost(data = x_matrix,
-               nround = 150, # default 100
-               eta = 0.45, # default 0.3
-               max.depth = 1, # default = 6 
-               gamma = 0.2, # default 0, if train error >>> test error, bring gamma into action
-               min_child_weight = 2, # default = 1
-               subsample = 0.95, # default = 1
-               colsample_bytree = 0.65, # default 1
+               nround = 300,
+               eta = 0.07, 
+               max.depth = 2, 
+               gamma = 0.1, 
+               min_child_weight = 2, 
+               subsample = 1, 
+               colsample_bytree = 1, 
                objective = "binary:logistic",
-               alpha=0.45,
-               eval_metric = "auc")
+               verbose = 0)
 
-# plot the most important features
+# Determine most important predictors 
 xgb_import = xgb.importance(colnames(x_num, do.NULL = TRUE, prefix = "col"), model = bst)
-xgb.plot.importance(xgb.importance(colnames(x_num, do.NULL = TRUE, prefix = "col"), model = bst), top_n = 71)
-```
 
-
-```{r}
+# Combine the output of both types of predictor quality measures
 combo = IV %>% left_join(xgb_import, by = c("Variable" = "Feature")) 
 combo[is.na(combo)] = 0
 
-combo %>% dplyr::select(Variable, Strength, InformationValue, Gain) %>% mutate(InformationValue = as.numeric(scale(InformationValue)), Gain = as.numeric(scale(Gain)), mean = InformationValue + Gain / 2) %>% arrange(Variable)
+# Normalize and combine the two measures
+combo.out = combo %>% dplyr::select(Variable, Strength, InformationValue, Gain) %>% mutate(InformationValue = as.numeric(scale(InformationValue)), Gain = as.numeric(scale(Gain)), Avg_Predict_Qual = InformationValue + Gain / 2) %>% arrange(Variable)
+
+# Plot the results
+library(RColorBrewer)
+fills <- rev(brewer.pal(6, "Blues"))
+    Variable <- InformationValue <- Strength <- NULL
+    ggplot(data = combo.out %>% filter(Avg_Predict_Qual > 0)) + geom_bar(aes(x = reorder(Variable, Avg_Predict_Qual), 
+        y = Avg_Predict_Qual, fill = Strength), stat = "identity") + 
+        coord_flip() + scale_fill_manual(values = fills) + theme(panel.grid.major.y = element_blank(), 
+        panel.grid.major.x = element_line(linetype = "dashed", 
+            colour = "grey"), panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), axis.ticks.x = element_blank(), 
+        axis.ticks.y = element_blank()) + xlab("Variable") + 
+        ylab("Prediction Value") + ggtitle("Prediction Value Summary for Predictors with Above Average Values")
 ```
 
-```{r}
-credit_select = credit
-# account_balance - c(2,3) 1,4
-# most_valueable_asset - c(2,3) 1,4
-# payment_status_of_previous_credit - c(0,1,2,3) 4
-# purpose - c(2,4,5,6,8,9,10) 3,1,0
-# sex__marital_status - c(1,4) 2,3
-# value_savings_stocks - c(2,3,4) 1, 5
+The plot above is one of the potential deliverables to the manager that summarizes the results nicely and compares the difference in prediction strength. The `combo.out` table could also be shared to give even more detailed results. 
 
-levels(credit_select$account_balance) = c("1","2","2","3")
-levels(credit_select$most_valuable_available_asset) = c("1","2","2","3")
-levels(credit_select$payment_status_of_previous_credit) = c("1","1","1","1","2")
-levels(credit_select$purpose) = c("0", "1", "2", "3", "2", "2", "2", "2", "2", "2")
-levels(credit_select$sex__marital_status) = c("1","2","3","1")
-levels(credit_select$value_savings_stocks) = c("1","2","2","2","3")
-
-# Eliminate?
-# concurrent_credits
-# duration_in_current_address
-# foreign_worker
-# guarantors
-# installment_per_cent
-# length_of_current_employment
-# no_of_credits_at_this_bank
-# no_of_dependents
-# occupation
-# telephone
-credit_select = credit_select %>% dplyr::select(-concurrent_credits, -duration_in_current_address, -foreign_worker, -guarantors, -instalment_per_cent, -length_of_current_employment, -no_of_credits_at_this_bank, -no_of_dependents, occupation, telephone)
-```
-
-
-```{r}
-set.seed(123)
-repeatedResamples = function(y, data, k = 10, reps=10) {
-    suppressWarnings(
-    for (idx in 1:reps) {
-         # Create custom indices: myFolds
-         myFolds <- createCVFolds(y, k = k)
-
-        # Create reusable trainControl object: myControl
-        myControl <- trainControl(summaryFunction = p35,
-                                  classProbs = TRUE, # IMPORTANT!
-                                  verboseIter = FALSE,
-                                  savePredictions = TRUE,
-                                  index = myFolds
-                                 )
-
-        log_fit = train(creditability ~ ., 
-                method = 'glm', 
-                family = 'binomial', 
-                data = data,
-                trControl=myControl,
-                metric = "P35")
-        
-        tuneGridRF = data.frame(
-                mtry=21
-            )
-        
-        rf_fit = train(creditability ~ ., 
-                        method = 'rf', 
-                        data = credit,
-                        trControl=myControl,
-                        tuneGrid=tuneGridRF,
-                        metric = "P35")
-        
-        log_reg_fit = train(creditability ~ ., 
-                method = 'regLogistic', 
-                data = data,
-                trControl=myControl,
-                metric = "P35")
-
-        rlda_fit = train(creditability ~ ., 
-                method = 'rlda', 
-                data = data,
-                trControl=myControl,
-                metric = "P35")
-        
-        tuneGridXGB <- expand.grid(
-                            nrounds=150,
-                            max_depth = 4,
-                            eta = 0.1,
-                            gamma = 0,
-                            colsample_bytree = 0.7,
-                            subsample = 0.75,
-                            min_child_weight = 1)
-
-        xgb_fit = train(creditability ~ ., 
-                method = 'xgbTree',
-                data = data,
-                trControl= myControl,
-                tuneGrid = tuneGridXGB,
-                metric = "P35")
-
-        # Create model_list
-        model_list <- list(log = log_fit, rf=rf_fit, rf_cut = rf_fit, xgb=xgb_fit, log_reg = log_reg_fit, rlda=rlda_fit)
-
-        if (idx == 1) {
-            # Pass model_list to resamples(): resamples
-            resamples <- resamples(model_list)
-        }
-        else {
-            current_resample = resamples(model_list)
-            resamples$values = bind_rows(resamples$values, current_resample$values)
-        }
-        
-    }
-    )
-       return(resamples) 
-    
-}
-fit_results_less_dims = repeatedResamples(credit_select$creditability, credit_select)
-summary(fit_results_less_dims)
-```
-
-## Round 4: Prediction Probability Cutoff Threshold Optimization
-
-```{r}
-
-```
-
-
-## Final Model Selection and Metrics
-
-```{r}
-rlda_fit = train(creditability ~ ., 
-                method = 'rlda', 
-                data = credit_select,
-                trControl = myControl,
-                metric = "P35")
-```
-
+It appears the fourth category of `account_balance` has the highest prediction value for determining creditability. Notably, the varaibles not on this list do not have a strong predictive value for creditability.
 
 
 ## Conclusion
@@ -745,119 +705,24 @@ For XGBoost, the following steps are conducted using the tuneGrid option in care
     6) Set alpha and lambda to best values from 5a and eta to best value from 5b
 
 The following code determines the best settings using 10X10 fold cross validation.
-```{r}
-### Tuning Board ###
-## Inital Settings
-training_data = credit
 
-myFolds <- createCVFolds(credit$creditability, k = 10)
-
-myControl <- trainControl(summaryFunction = p35,
-                          classProbs = TRUE, # IMPORTANT!
-                          verboseIter = TRUE,
-                          savePredictions = TRUE,
-                          index = myFolds
-)
-
-## Helper function
-Mode <- function(x) {
-    ux <- unique(x)
-    ux[which.max(tabulate(match(x, ux)))]
-}
-
-repeatedResamples = function(formula, data, method, k = 10, reps=10, cutoff = 0.5, verboseIter = TRUE, non_tune_param = FALSE, ...) {
-    set.seed(123)
-    results = list()
-    suppressWarnings(
-        for (idx in 1:reps) {
-            
-            # Create custom indices: myFolds
-            y = data[,all.vars(as.formula(formula))[1]][[1]]
-            myFolds = createCVFolds(y, k = k)
-            # Create reusable trainControl object: myControl
-            myControl <- trainControl(summaryFunction = p35,
-                                      classProbs = TRUE, # IMPORTANT!
-                                      verboseIter = verboseIter,
-                                      savePredictions = TRUE,
-                                      index = myFolds
-            )
-            
-            #### MODEL ZONE ####
-            mod_fit = train(formula,
-                            method = method,
-                            data = data,
-                            trControl= myControl,
-                            metric = "P35",
-                            ...)
-            ########
-            results[[idx]] = mod_fit$results %>% arrange(desc(P35))
-            
-        }
-    )
-        if (!non_tune_param) {
-            # most_common_result = sapply(results, function(x) row.names(x) %>% as.numeric()) == Mode(sapply(results, function(x) row.names(x) %>% as.numeric()))
-            # results = results[most_common_result]
-            return(results)
-        }
-        else {
-            best_setting_idx = Mode(sapply(results, function(x) which.max(x$P35)))
-            cv_metric = median(sapply(results, function(x) x$P35[best_setting_idx]))
-            best_setting = unique(sapply(results, function(x) x[,1][best_setting_idx]))
-            results = list(best_setting = best_setting, cv_metric = cv_metric) 
-            return(results)
-        }
-}
-
-### Unique model tuning grid for tunable parameters ###
-tuneGridXGB <- expand.grid(
-    nrounds=100,
-    max_depth = seq(1,10,1),
-    eta = 0.1,
-    gamma = 0,
-    colsample_bytree = 0.8,
-    subsample = 0.8,
-    min_child_weight = seq(1,6,1))
-
-######--------------------######
-
-### Unique model settings for tunable parameters
-repeatedResamples(formula = creditability ~ .,
-                  data = training_data,
-                  method = "xgbTree",
-                  tuneGrid = tuneGridXGB,
-                  verboseIter = FALSE)
-
-### For parameters not tunable by the caret package
-out = data.frame()
-for (setting in seq(0,1,0.1)) {
-    set.seed(123)
-    results = repeatedResamples(formula = creditability ~ .,
-                                data = training_data,
-                                method = "xgbTree",
-                                tuneGrid = tuneGridXGB,
-                                non_tune_param = TRUE,
-                                alpha = setting)
-    new = data.frame(setting = setting, cv_metric = median(sapply(results, function(x) x$P35)))
-    out = bind_rows(out, new)
-}
-out %>% arrange(desc(cv_metric))
-```
 
 ```{r}
 ## trainControl settings for hyperparameter tunning
 myControl <- trainControl(summaryFunction = p35,
                           classProbs = TRUE, # IMPORTANT!
-                          verboseIter = FALSE,
+                          verboseIter = TRUE,
                           savePredictions = TRUE,
-                          method= "cv",
-                          number = 10
+                          method= "repeatedcv",
+                          number = 5,
+                          repeats = 5
 )
 
 ### Unique model tuning grid for tunable parameters ###
 tuneGridXGB <- expand.grid(
     nrounds=300,
     max_depth = 2,
-    eta = 0.1,
+    eta = 0.01,
     gamma = 0.1,
     colsample_bytree = 1,
     subsample = 1,
@@ -865,23 +730,24 @@ tuneGridXGB <- expand.grid(
 
 ## Tuning model for tunable hyperparameters in caret
 set.seed(123)
-train(formula = creditability ~ .,
-                  data = credit,
-                  method = "rf",
-                  # tuneGrid = tuneGridXGB,
-                  trControl = myControl)
+train(creditability ~ .,
+       data = credit,
+       method = "rlda",
+        # tuneGrid = tuneGridXGB,
+        trControl = myControl)
 
 
 ## Tuning model for non-tunable hyperparameters in caret
 set.seed(123)
 results_list = list()
 for (value in seq(0,1, 0.1)) {
-fit = train(formula = creditability ~ .,
+fit = train(creditability ~ .,
                   data = credit,
                   method = "xgbTree",
                   tuneGrid = tuneGridXGB,
                   trControl = myControl,
-                  alpha = value)  
+                  alpha = 0.7,
+                  lambda = 0.7)  
 results_list[[as.character(value)]] = fit$results 
 }
 ```
@@ -907,6 +773,8 @@ results_list[[as.character(value)]] = fit$results
 ```
 
 ```{r}
+round1_tuneGridRF = data.frame(mtry=11)
+
 round1_tuneGridXGB <- expand.grid(
             nrounds=300,
             max_depth = 2,
@@ -915,5 +783,15 @@ round1_tuneGridXGB <- expand.grid(
             colsample_bytree = 1,
             subsample = 1,
             min_child_weight = 2)
+
+round2_tuneGridRegLog = expand.grid(
+        cost = 1,
+        loss = "L1",
+        epsilon = 0.01
+)
+
+round2_tuneGridrlda = data.frame(estimator = "Moore-Penrose Pseudo-Inverse")
+
+
 ```
 
