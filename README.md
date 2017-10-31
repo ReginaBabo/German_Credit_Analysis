@@ -1,5 +1,5 @@
 # German_Credit_Analysis
-Project features a model finding process for determining the creditworthiness of loan applicants. Final model improves over no-information model by nearly 15% per unit profit.
+Project features a model finding process for determining the creditworthiness of loan applicants. Final model improves over a blind proportional model by an estimated 13% per unit profit.
 
 Completed by Connor Lenio. Email: cojamalo@gmail.com
 
