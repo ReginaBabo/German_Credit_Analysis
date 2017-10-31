@@ -255,7 +255,7 @@ p35 = function(data, lev = NULL, model = NULL) {
 ```
 <br>
 
-This cost function can be tested using hypothetical predictions from the no-information model, which always predicts the most common class, "Good" and a perfect predictor which predicts all of the classes exactly the same as what is observed in the data.
+This cost function can be tested using hypothetical predictions from the no-information model, which always predicts the most common class, "Good" and a perfect model which predicts all of the classes exactly the same as what is observed in the data.
 
 No-Information Model
 ```{r}
@@ -271,6 +271,24 @@ p35(data.frame(obs = credit$creditability, pred = credit$creditability))
 The no-information model has an accuracy of 70%, specificity of 0%, and a P35 value of -0.055. Thus, a dummy model that always issues loans regardless of creditability (labels all applicants as "Good") would be expected to have a 0.055 unit loss. If the average loan amount is \$10,000, then the total loss using this model would be \$550,000 and the per applicant loss is \$550. Note that specificity is included as the specificity (1 - False Positive Rate, or TN / sum(Predicted Negatives)) is going to be strongly related with the P35. This relationship exists because the cost function has a large penalty for false positives, the case when the model predicts an applicant is "Good" when they should be "Bad". This example also indicates how a model's accuracy can be decent at 70%, but expected unit profit is negative, a loss, reinforcing the importance of having both the specificity and P35 metrics included in the model's evaluation.
 
 The perfect model has an accuracy of 100%, a specificity of 100%, and a P35 of 0.245. Thus, if a perfect model existed, it would have a 0.245 unit profit. If the average loan amount is \$10,000, then the total profit using this model would be \$2,450,000 and the per applicant profit is \$2450. In this case, the bank is only ever profiting, and thus, pockets a 35% profit on all loans. It is important that no model should ever exceed this hypothetical value and any model that comes close to it should be evaluated carefully as no model is perfect.   
+
+Absent other information, the most relevent null-model to use for comparison in this analysis is a model that represents randomly assigning "Good" or "Poor" creditability given the assumption that loan applicants are creditable at a 70-30 ratio. Thus, such a strategy always predicts 700 "Good" and 300 "Poor" applicants. However, the predictions are randomly assigned to applicants. Such a strategy would have varying performance depending on which applicants were randomly assigned to which category. In fact, one of the possibilities for such a strategy is one where all the predictions are 100% accurate. However, the chances of this occuring are minimal. To capture the model's performance considering this random variation, the average performance of the model is used. This case is the one where the model predicts both categories at a 70-30 Good-Poor split. 
+
+Blind Proportional Model
+```{r}
+blind = credit %>% 
+        select(creditability) %>%
+        mutate(row_num = 1:1000) %>%
+        arrange(creditability) %>%
+        mutate(predicted = c(rep("Good", 490), rep("Poor", 210), rep("Good", 210), rep("Poor", 90))) %>%
+        arrange(row_num) 
+
+p35(data.frame(obs = blind$creditability, pred = blind$predicted))
+```
+<br>
+
+The blind proportional model has an accuracy of 58%, specificity of 30%, and a P35 value of -0.039. Thus, this strategy, on average, improves over the no-information model by about 0.016, but still represents an average loss for the bank.
+
 
 ### Exploring the Initial Model Space
 
@@ -359,7 +377,7 @@ summary(report_dat)
 ```
 <br>
 
-Overall, the four models improved over the performance of no-information model. The median of the metrics for each model's performance over the CV folds is used for the metric estimate as the median does not depend on the tail behavior of the performance metric distribution and, thus, is highly resistant to aberrant data points created during the k-fold process. 
+Overall, the four models improved over the performance of blind porportional model. The median of the metrics for each model's performance over the CV folds is used for the metric estimate as the median does not depend on the tail behavior of the performance metric distribution and, thus, is highly resistant to aberrant data points created during the k-fold process. 
 
 The best model for this round is the xgboost model. 
 
@@ -623,7 +641,7 @@ It appears the fourth category of `account_balance` has the highest predictive v
 
 ## Conclusion
 
-The best model to predict creditability uses the xgboost algorithm to fit a gradient boosted tree classification model to the data. The final model, when using a 0.7 cutoff threshold, is expected produce a per unit profit of 0.092. This expected performance is an increase of 0.147 in expected per unit profit over a no-information model that only predicts "Good" creditability has an expected per unit profit of -0.055. If the model meets this performance estimate, the bank should expect to earn a per applicant profit of $920 if the average loan amount is \$10,000.
+The best model to predict creditability uses the xgboost algorithm to fit a gradient boosted tree classification model to the data. The final model, when using a 0.7 cutoff threshold, is expected produce a per unit profit of 0.092. This expected performance is an increase of 0.131 in expected per unit profit over a blind proportional model that predicts "Good" and "ppoor creditability at a 70-30 split and has an expected per unit profit of -0.039. If the model meets this performance estimate, the bank should expect to earn a per applicant profit of $920 if the average loan amount is \$10,000.
 
 One advantage of the xgboost model is it is portable to another language like Python. This benefit means the model could be coded into a predictive program that loan managers could run on applicant information. This tool could also be constructed using the R Shiny package as well.
 
